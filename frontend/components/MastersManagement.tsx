@@ -1,9 +1,10 @@
 
 import React, { useState, useEffect } from 'react';
-import { MasterRecord, MasterType } from '../types';
+import { MasterRecord, MasterType, WorkflowV2Rule } from '../types';
 import { COA_CATEGORIES, GST_TYPES, TRANSACTION_TYPES, CENTERS, ENTITIES, MASTER_GROUPS } from '../constants';
 import { getAllSubdepartments } from '../utils/mastersHelpers';
 import MultiSelect from './MultiSelect';
+import { apiPatch } from '../api';
 
 interface MastersManagementProps {
   masters: Record<MasterType, MasterRecord[]>;
@@ -12,9 +13,12 @@ interface MastersManagementProps {
   allowedMasterTypes?: MasterType[] | null;
   /** null = full access (e.g. Super Admin). Otherwise per sub-module create/edit/view/delete. */
   mastersPermissions?: Partial<Record<MasterType, ('create' | 'edit' | 'view' | 'delete')[]>> | null;
+  onRefreshPendingItemVendor?: () => void;
+  refetchMasters?: () => Promise<void>;
+  workflowV2Rules?: WorkflowV2Rule[];
 }
 
-const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate, allowedMasterTypes = null, mastersPermissions = null }) => {
+const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate, allowedMasterTypes = null, mastersPermissions = null, onRefreshPendingItemVendor, refetchMasters, workflowV2Rules = [] }) => {
   const [activeSubTab, setActiveSubTab] = useState<MasterType>('Vendor');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRecord, setEditingRecord] = useState<MasterRecord | null>(null);
@@ -654,6 +658,9 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
                     <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Descriptor</th>
                     <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Integration Link</th>
                     <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Protocol Status</th>
+                    {(activeSubTab === 'Item' || activeSubTab === 'Vendor') && (
+                      <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Workflow Status</th>
+                    )}
                     <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Actions</th>
                   </tr>
                 </thead>
@@ -705,6 +712,38 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
                             <span className="text-[9px] font-black uppercase text-slate-400">{record.status}</span>
                           )}
                         </td>
+                        {(activeSubTab === 'Item' || activeSubTab === 'Vendor') && (
+                          <td className="px-6 py-5 text-center">
+                            <span className={`text-[9px] font-black uppercase px-2 py-1 rounded-lg ${
+                              (record as any).workflowStatus === 'Approved' ? 'bg-emerald-100 text-emerald-700' :
+                              (record as any).workflowStatus === 'Rejected' ? 'bg-rose-100 text-rose-600' :
+                              (record as any).workflowStatus === 'Pending' ? 'bg-amber-100 text-amber-700' :
+                              'bg-slate-100 text-slate-500'
+                            }`}>
+                              {(record as any).workflowStatus || 'Draft'}
+                            </span>
+                            {((record as any).workflowStatus === 'Draft' || !(record as any).workflowStatus) &&
+                             workflowV2Rules.some((r) => r.scope === activeSubTab && r.masterId === record.id) &&
+                             refetchMasters &&
+                             onRefreshPendingItemVendor && (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    await apiPatch(`masters/${activeSubTab}/${record.id}/workflow`, { action: 'submit' });
+                                    await refetchMasters();
+                                    onRefreshPendingItemVendor();
+                                  } catch (e) {
+                                    alert((e as Error).message || 'Submit failed');
+                                  }
+                                }}
+                                className="ml-2 px-3 py-1 bg-indigo-600 text-white text-[9px] font-black uppercase rounded-lg hover:bg-indigo-700"
+                              >
+                                Submit for approval
+                              </button>
+                            )}
+                          </td>
+                        )}
                         <td className="px-6 py-5 text-right">
                           <div className="flex justify-end space-x-3 opacity-0 group-hover:opacity-100 transition-opacity">
                             {canEdit && (
@@ -723,7 +762,7 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
                     );
                   })}
                   {currentRecords.length === 0 && (
-                    <tr><td colSpan={4} className="px-6 py-20 text-center italic text-slate-400">No records found.</td></tr>
+                    <tr><td colSpan={activeSubTab === 'Item' || activeSubTab === 'Vendor' ? 5 : 4} className="px-6 py-20 text-center italic text-slate-400">No records found.</td></tr>
                   )}
                 </tbody>
               </table>

@@ -46,7 +46,7 @@ export interface MasterRecord {
   [key: string]: any;
 }
 
-export type NavigationTab = 'dashboard' | 'users' | 'roles' | 'workflows' | 'masters' | 'purchase_request' | 'rate_contract' | 'purchase_order' | 'direct_invoice' | 'budgets';
+export type NavigationTab = 'dashboard' | 'users' | 'roles' | 'workflows' | 'workflow_v2' | 'item_vendor_approval' | 'masters' | 'purchase_request' | 'rate_contract' | 'purchase_order' | 'direct_invoice' | 'budgets';
 
 export type MasterType = 
   | 'Vendor' | 'Vendor Site' | 'Item' | 'Item Type' | 'Department' | 'Subdepartment' 
@@ -78,6 +78,8 @@ export interface Budget {
   locationName: string;
   costCenterName: string;
   coaCode: string; // GL Code
+  department?: string;
+  subDepartment?: string;
   budgetType: BudgetType;
   amount: number;
   consumedAmount: number;
@@ -159,6 +161,7 @@ export interface PurchaseRequest {
   rejectionRemarks?: string;
   createdBy: string;
   createdAt: string;
+  requiredDate?: string;
   shippingAddressId?: string;
   billingAddressId?: string;
 }
@@ -185,6 +188,7 @@ export interface RateContract {
   rejectionRemarks?: string;
   createdBy: string;
   createdAt: string;
+  requiredDate?: string;
   shippingAddressId?: string;
   billingAddressId?: string;
 }
@@ -294,6 +298,15 @@ export interface WorkflowRule {
   centerName?: string;
   minAmount: number;
   maxAmount: number | null; // null means no upper limit
+  approvalChain: ApprovalStep[];
+  isActive: boolean;
+}
+
+/** Item/Vendor creation approval rules (independent of PO/RC/GRN/Invoice workflows). */
+export interface WorkflowV2Rule {
+  id: string;
+  scope: 'Item' | 'Vendor';
+  masterId: string;
   approvalChain: ApprovalStep[];
   isActive: boolean;
 }

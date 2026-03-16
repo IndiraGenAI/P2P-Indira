@@ -1,6 +1,7 @@
 
 import React, { useState } from 'react';
 import { Budget, BudgetAmendment, BudgetType, BudgetControlType, BudgetValidity, MasterRecord, MasterType, User, PurchaseOrder, PurchaseRequest } from '../types';
+import { getDepartments, getSubdepartmentsForDepartment } from '../utils/mastersHelpers';
 import { Plus, Edit2, History, CheckCircle, XCircle, ArrowRightLeft, TrendingUp, TrendingDown, AlertCircle, BarChart3, PieChart as PieChartIcon, FileText } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
@@ -37,10 +38,11 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
   });
 
   const handleAddBudget = () => {
-    if (!newBudget.coaCode || !newBudget.amount) return;
+    if (!newBudget.coaCode || !newBudget.amount || !newBudget.costCenterName) return;
     const budget: Budget = {
       ...newBudget as Budget,
       id: `B-${Math.random().toString(36).substr(2, 9).toUpperCase()}`,
+      costCenterName: newBudget.costCenterName ?? '',
       consumedAmount: 0
     };
     setBudgets([...budgets, budget]);
@@ -119,6 +121,8 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
                 <th className="p-4 font-semibold text-slate-700">GL Code</th>
                 <th className="p-4 font-semibold text-slate-700">Type</th>
                 <th className="p-4 font-semibold text-slate-700">Entity/Location</th>
+                <th className="p-4 font-semibold text-slate-700">Department</th>
+                <th className="p-4 font-semibold text-slate-700">Subdepartment</th>
                 <th className="p-4 font-semibold text-slate-700">Total Budget</th>
                 <th className="p-4 font-semibold text-slate-700">Consumed</th>
                 <th className="p-4 font-semibold text-slate-700">Balance</th>
@@ -142,6 +146,8 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
                       {budget.entityName}<br/>
                       <span className="text-xs text-slate-400">{budget.locationName} - {budget.costCenterName}</span>
                     </td>
+                    <td className="p-4 text-slate-600 text-sm">{budget.department ?? '—'}</td>
+                    <td className="p-4 text-slate-600 text-sm">{budget.subDepartment ?? '—'}</td>
                     <td className="p-4 font-medium">₹{budget.amount.toLocaleString()}</td>
                     <td className="p-4">
                       <div className="flex flex-col gap-1">
@@ -460,6 +466,36 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Department</label>
+                  <select 
+                    className="w-full p-2 border border-slate-200 rounded-lg"
+                    value={newBudget.department ?? ''}
+                    onChange={e => setNewBudget({ ...newBudget, department: e.target.value || undefined, subDepartment: undefined })}
+                  >
+                    <option value="">Select Department</option>
+                    {getDepartments(masters).map(d => (
+                      <option key={d.id} value={d.name}>{d.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Subdepartment</label>
+                  <select 
+                    className="w-full p-2 border border-slate-200 rounded-lg"
+                    value={newBudget.subDepartment ?? ''}
+                    onChange={e => setNewBudget({ ...newBudget, subDepartment: e.target.value || undefined })}
+                    disabled={!newBudget.department}
+                  >
+                    <option value="">Select Subdepartment</option>
+                    {getSubdepartmentsForDepartment(masters, newBudget.department ?? '').map(sd => (
+                      <option key={sd.id} value={sd.name}>{sd.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Entity</label>
                   <select 
                     className="w-full p-2 border border-slate-200 rounded-lg"
@@ -481,6 +517,20 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
                     {masters.Center.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                   </select>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Cost Center</label>
+                <select 
+                  className="w-full p-2 border border-slate-200 rounded-lg"
+                  value={newBudget.costCenterName ?? ''}
+                  onChange={e => setNewBudget({ ...newBudget, costCenterName: e.target.value || undefined })}
+                >
+                  <option value="">Select Cost Center</option>
+                  {(masters['Cost Center'] || []).map(cc => (
+                    <option key={cc.id} value={cc.name}>{cc.name}</option>
+                  ))}
+                </select>
               </div>
 
               <div className="grid grid-cols-2 gap-4">

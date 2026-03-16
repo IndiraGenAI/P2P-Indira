@@ -116,20 +116,20 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     billingAddressId: ''
   });
 
-  // Recalculate GRN items when form-level TDS or GST changes (PO Create GRN)
+  // Recalculate GRN items when form-level TDS or GST changes (preserve per-line GST)
   useEffect(() => {
     if (grnForm.id || !selectedPO || selectedGRN || !grnForm.items?.length) return;
     const vendor = (masters.Vendor ?? []).find((v: any) => v.id === selectedPO.vendorId);
     const center = (masters.Center ?? []).find((c: any) => c.name === grnForm.location);
     const isIntraState = vendor && center && (vendor as any).state === (center as any).state;
     const tdsPercent = grnForm.tds ?? 0;
-    const gstPercent = grnForm.gst ?? 0;
 
     setGrnForm(prev => {
       const updatedItems = (prev.items || []).map((item: ItemLine) => {
         const qty = Number(item.quantity) || 0;
         const rate = Number(item.rate) || 0;
         const base = qty * rate;
+        const gstPercent = item.gst ?? prev.gst ?? 0;
         const tdsAmount = base * (tdsPercent / 100);
         const gstAmount = base * (gstPercent / 100);
         const totalAmount = base + gstAmount - tdsAmount;
@@ -158,13 +158,12 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     });
   }, [grnForm.tds, grnForm.gst, grnForm.location, selectedPO?.id, selectedGRN]);
 
-  const updateGrnItem = (itemId: string, field: 'quantity' | 'remarks', value: number | string) => {
+  const updateGrnItem = (itemId: string, field: 'quantity' | 'remarks' | 'gst', value: number | string) => {
     if (!selectedPO) return;
     const vendor = (masters.Vendor ?? []).find((v: any) => v.id === selectedPO.vendorId);
     const center = (masters.Center ?? []).find((c: any) => c.name === grnForm.location);
     const isIntraState = vendor && center && (vendor as any).state === (center as any).state;
     const tdsPercent = grnForm.tds ?? 0;
-    const gstPercent = grnForm.gst ?? 0;
 
     setGrnForm(prev => {
       const items = (prev.items || []).map(i => {
@@ -173,10 +172,29 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
           const qty = Number(value) || 0;
           const rate = Number(i.rate) || 0;
           const base = qty * rate;
+          const gstPercent = i.gst ?? prev.gst ?? 0;
           const tdsAmount = base * (tdsPercent / 100);
           const gstAmount = base * (gstPercent / 100);
           const totalAmount = base + gstAmount - tdsAmount;
           const updated: ItemLine = { ...i, quantity: qty, amount: base, tds: tdsPercent, gst: gstPercent, tdsAmount, gstAmount, totalAmount };
+          if (isIntraState) {
+            updated.cgst = gstAmount / 2;
+            updated.sgst = gstAmount / 2;
+            updated.igst = 0;
+          } else {
+            updated.cgst = 0;
+            updated.sgst = 0;
+            updated.igst = gstAmount;
+          }
+          return updated;
+        }
+        if (field === 'gst') {
+          const gstPercent = Number(value) || 0;
+          const base = Number(i.amount) || (Number(i.quantity) || 0) * (Number(i.rate) || 0);
+          const tdsAmount = base * (tdsPercent / 100);
+          const gstAmount = base * (gstPercent / 100);
+          const totalAmount = base + gstAmount - tdsAmount;
+          const updated: ItemLine = { ...i, gst: gstPercent, amount: base, tds: tdsPercent, tdsAmount, gstAmount, totalAmount };
           if (isIntraState) {
             updated.cgst = gstAmount / 2;
             updated.sgst = gstAmount / 2;
@@ -195,31 +213,31 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     });
   };
 
-  // Recalculate all items when top-level TDS or GST changes
+  // Recalculate all items when top-level TDS or GST changes (preserve per-line GST)
   useEffect(() => {
     setPoForm(prev => {
       const vendor = (masters.Vendor ?? []).find(v => v.id === prev.vendorId);
       const center = (masters.Center ?? []).find(c => c.name === prev.centerNames?.[0]);
       const isIntraState = vendor && center && vendor.state === center.state;
       const tdsPercent = prev.tds || 0;
-      const gstPercent = prev.gst || 0;
 
       const updatedItems = (prev.items || []).map(item => {
         const qty = item.quantity || 0;
         const rate = item.rate || 0;
         const baseAmount = qty * rate;
         const tdsAmount = baseAmount * (tdsPercent / 100);
+        const gstPercent = item.gst ?? prev.gst ?? 0;
         const gstAmount = baseAmount * (gstPercent / 100);
-        
-        const updated = { 
-          ...item, 
+
+        const updated = {
+          ...item,
           amount: baseAmount,
           tds: tdsPercent,
           gst: gstPercent,
           tdsAmount,
           gstAmount
         };
-        
+
         if (isIntraState) {
           updated.cgst = gstAmount / 2;
           updated.sgst = gstAmount / 2;
@@ -229,7 +247,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
           updated.sgst = 0;
           updated.igst = gstAmount;
         }
-        
+
         updated.totalAmount = baseAmount + gstAmount - tdsAmount;
         return updated;
       });
@@ -258,7 +276,6 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       const center = (masters.Center ?? []).find(c => c.name === prev.centerNames?.[0]);
       const isIntraState = vendor && center && vendor.state === center.state;
       const tdsPercent = prev.tds || 0;
-      const gstPercent = prev.gst || 0;
 
       return {
         ...prev,
@@ -277,17 +294,17 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
             if (field === 'quantity' || field === 'rate' || field === 'tds' || field === 'gst') {
               const qty = updated.quantity || 0;
               const rate = updated.rate || 0;
-              
               const baseAmount = qty * rate;
               const tdsAmount = baseAmount * (tdsPercent / 100);
+              const gstPercent = (field === 'gst' ? Number(value) : (updated.gst ?? prev.gst)) || 0;
+              updated.gst = gstPercent;
               const gstAmount = baseAmount * (gstPercent / 100);
-              
+
               updated.amount = baseAmount;
               updated.tds = tdsPercent;
-              updated.gst = gstPercent;
               updated.tdsAmount = tdsAmount;
               updated.gstAmount = gstAmount;
-              
+
               if (isIntraState) {
                 updated.cgst = gstAmount / 2;
                 updated.sgst = gstAmount / 2;
@@ -297,7 +314,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                 updated.sgst = 0;
                 updated.igst = gstAmount;
               }
-              
+
               updated.totalAmount = baseAmount + gstAmount - tdsAmount;
             }
             return updated;
@@ -322,6 +339,40 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     const total = (poForm.items || []).reduce((sum, item) => sum + (item.totalAmount || 0), 0);
     setPoForm(prev => ({ ...prev, amount: total }));
   }, [poForm.items]);
+
+  const updateInvoiceItem = (itemId: string, field: 'quantity' | 'gst' | 'tds', value: number) => {
+    if (!selectedGRN || !selectedPO) return;
+    const vendor = (masters.Vendor ?? []).find((v: any) => v.id === selectedPO.vendorId);
+    const center = (masters.Center ?? []).find((c: any) => c.name === invoiceForm.location);
+    const isIntraState = vendor && center && (vendor as any).state === (center as any).state;
+
+    setInvoiceForm(prev => {
+      const items = (prev.items || []).map(i => {
+        if (i.id !== itemId) return i;
+        const qty = field === 'quantity' ? value : (Number(i.quantity) || 0);
+        const rate = Number(i.rate) || 0;
+        const base = qty * rate;
+        const gstPercent = field === 'gst' ? value : (i.gst ?? prev.gst ?? 0);
+        const tdsPercent = field === 'tds' ? value : (i.tds ?? prev.tds ?? 0);
+        const gstAmount = base * (gstPercent / 100);
+        const tdsAmount = base * (tdsPercent / 100);
+        const totalAmount = base + gstAmount - tdsAmount;
+        const updated: ItemLine = { ...i, quantity: qty, amount: base, gst: gstPercent, tds: tdsPercent, gstAmount, tdsAmount, totalAmount };
+        if (isIntraState) {
+          updated.cgst = gstAmount / 2;
+          updated.sgst = gstAmount / 2;
+          updated.igst = 0;
+        } else {
+          updated.cgst = 0;
+          updated.sgst = 0;
+          updated.igst = gstAmount;
+        }
+        return updated;
+      });
+      const amount = items.reduce((sum, i) => sum + (Number(i.totalAmount) || 0), 0);
+      return { ...prev, items, amount };
+    });
+  };
 
   const downloadTemplate = (type: 'PO' | 'GRN' | 'Invoice') => {
     const headers = 'Item Name,Qty,Rate,Remarks';
@@ -1059,11 +1110,11 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                   <div className="space-y-6">
                     {poForm.items?.map((item, index) => (
                       <div key={item.id} className="bg-slate-50 p-6 rounded-3xl border border-slate-100 space-y-4">
-                        <div className="grid grid-cols-12 gap-4 items-end">
-                          <div className="col-span-2 space-y-1">
+                        <div className="grid grid-cols-12 gap-2 items-end">
+                          <div className="col-span-2 space-y-1 min-w-0">
                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Item Name</label>
                             <select 
-                              className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
                               value={item.itemName}
                               onChange={e => updateItem(item.id, 'itemName', e.target.value)}
                             >
@@ -1071,56 +1122,78 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                               {(masters.Item ?? []).filter(i => !poForm.items?.some(selected => selected.id !== item.id && selected.itemName === i.name)).map(i => <option key={i.id} value={i.name}>{i.name}</option>)}
                             </select>
                           </div>
-                          <div className="col-span-2 space-y-1">
+                          <div className="col-span-1 space-y-1">
                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">GL Code</label>
                             <input
                               type="text"
                               readOnly
-                              className="w-full bg-slate-100 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-600 cursor-not-allowed"
+                              className="w-full bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-slate-600 cursor-not-allowed"
                               value={item.coaCode ? `${item.coaCode}` : 'Select item'}
                               title={item.coaCode ? 'Locked from Masters → Item → COA Mapping' : 'Select an item to see mapped GL code'}
-                            />
-                          </div>
-                          <div className="col-span-2 space-y-1">
-                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Rate (INR)</label>
-                            <input 
-                              type="number"
-                              className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
-                              value={item.rate}
-                              onChange={e => updateItem(item.id, 'rate', Number(e.target.value))}
                             />
                           </div>
                           <div className="col-span-1 space-y-1">
                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Qty</label>
                             <input 
                               type="number"
-                              className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
                               value={item.quantity}
                               onChange={e => updateItem(item.id, 'quantity', Number(e.target.value))}
                             />
                           </div>
-                          <div className="col-span-2 space-y-1">
-                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Base Amount</label>
+                          <div className="col-span-1 space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Rate</label>
                             <input 
                               type="number"
-                              readOnly
-                              className="w-full bg-slate-100 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-black text-slate-600"
-                              value={item.amount?.toFixed(2)}
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                              value={item.rate}
+                              onChange={e => updateItem(item.id, 'rate', Number(e.target.value))}
                             />
                           </div>
-                          <div className="col-span-3 space-y-1">
+                          <div className="col-span-1 space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Base Amount</label>
+                            <div className="w-full bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 text-sm font-black text-slate-600">
+                              {Number(item.amount || 0).toFixed(2)}
+                            </div>
+                          </div>
+                          <div className="col-span-1 space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">GST</label>
+                            <select 
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                              value={item.gst ?? ''}
+                              onChange={e => updateItem(item.id, 'gst', Number(e.target.value))}
+                            >
+                              <option value="">Select GST</option>
+                              {(masters.GST ?? []).map(g => (
+                                <option key={g.id} value={g.rate}>{g.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="col-span-1 space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">GST Amount</label>
+                            <div className="w-full bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 text-sm font-black text-slate-600">
+                              {Number(item.gstAmount || 0).toFixed(2)}
+                            </div>
+                          </div>
+                          <div className="col-span-1 space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Net Amount</label>
+                            <div className="w-full bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 text-sm font-black text-slate-600">
+                              {Number(item.totalAmount ?? item.amount ?? 0).toFixed(2)}
+                            </div>
+                          </div>
+                          <div className="col-span-2 space-y-1 min-w-0">
                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Remarks <span className="text-red-500">*</span></label>
                             <input 
                               type="text"
                               placeholder="Remarks"
-                              className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
                               value={item.remarks}
                               onChange={e => updateItem(item.id, 'remarks', e.target.value)}
                             />
                           </div>
-                          <div className="col-span-1 flex justify-center pb-1">
+                          <div className="col-span-1 flex justify-end pb-1">
                             {poForm.items!.length > 1 && (
-                              <button onClick={() => removeItem(item.id)} className="text-red-400 hover:text-red-600 transition-colors p-2 hover:bg-red-50 rounded-xl">
+                              <button onClick={() => removeItem(item.id)} className="flex-shrink-0 text-red-400 hover:text-red-600 transition-colors p-2 hover:bg-red-50 rounded-xl">
                                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                               </button>
                             )}
@@ -1291,19 +1364,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                       {grnForm.subDepartment || '—'}
                     </div>
                   </div>
-                  {/* Row 5: TDS | GST */}
-                  <div className="space-y-2">
-                    <label className="text-xs font-black text-slate-500 uppercase tracking-wider">TDS</label>
-                    <select
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium disabled:opacity-50"
-                      value={grnForm.tds}
-                      onChange={e => setGrnForm({ ...grnForm, tds: Number(e.target.value) })}
-                      disabled={isGrnReadOnly}
-                    >
-                      <option value="0">Select TDS</option>
-                      {(masters['TDS'] || []).map((t: any) => <option key={t.id} value={t.rate}>{t.name}</option>)}
-                    </select>
-                  </div>
+                  {/* Row 5: GST */}
                   <div className="space-y-2">
                     <label className="text-xs font-black text-slate-500 uppercase tracking-wider">GST</label>
                     <select
@@ -1354,17 +1415,17 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                       const poItem = selectedPO.items?.find((i: ItemLine) => i.id === grnItem.id);
                       const maxQty = poItem ? Number(poItem.quantity) || 0 : 0;
                       return (
-                        <div key={grnItem.id} className="grid grid-cols-12 gap-4 items-end bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                          <div className="col-span-2 space-y-1">
+                        <div key={grnItem.id} className="grid grid-cols-12 gap-2 items-end bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                          <div className="col-span-2 space-y-1 min-w-0">
                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Item Name</label>
-                            <div className="text-sm font-bold text-slate-700">{grnItem.itemName}</div>
+                            <div className="text-sm font-bold text-slate-700 truncate">{grnItem.itemName}</div>
                           </div>
-                          <div className="col-span-2 space-y-1">
+                          <div className="col-span-1 space-y-1">
                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Qty</label>
                             <input
                               type="number"
                               min={0}
-                              className={`w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold bg-white disabled:opacity-50 ${(Number(grnItem.quantity) || 0) > maxQty ? 'border-red-500' : ''}`}
+                              className={`w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold bg-white disabled:opacity-50 ${(Number(grnItem.quantity) || 0) > maxQty ? 'border-red-500' : ''}`}
                               value={grnItem.quantity}
                               onChange={e => {
                                 const qty = Number(e.target.value);
@@ -1377,20 +1438,42 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                               disabled={!!grnForm.id}
                             />
                           </div>
-                          <div className="col-span-2 space-y-1">
+                          <div className="col-span-1 space-y-1">
                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Rate (INR)</label>
                             <div className="text-sm font-bold text-slate-700">₹{(Number(grnItem.rate) || 0).toFixed(2)}</div>
                           </div>
-                          <div className="col-span-2 space-y-1">
+                          <div className="col-span-1 space-y-1">
                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Base Amount</label>
                             <div className="text-sm font-bold text-slate-700">₹{(Number(grnItem.amount) || 0).toFixed(2)}</div>
                           </div>
-                          <div className="col-span-3 space-y-1">
+                          <div className="col-span-1 space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">GST</label>
+                            <select
+                              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold bg-white disabled:opacity-50"
+                              value={grnItem.gst ?? ''}
+                              onChange={e => updateGrnItem(grnItem.id, 'gst', Number(e.target.value))}
+                              disabled={!!grnForm.id}
+                            >
+                              <option value="">Select GST</option>
+                              {(masters.GST ?? masters['GST'] ?? []).map((g: { id: string; name: string; rate: number }) => (
+                                <option key={g.id} value={g.rate}>{g.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="col-span-1 space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">GST Amount</label>
+                            <div className="text-sm font-bold text-slate-700">₹{(Number(grnItem.gstAmount) || 0).toFixed(2)}</div>
+                          </div>
+                          <div className="col-span-1 space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Net Amount</label>
+                            <div className="text-sm font-bold text-slate-700">₹{(Number(grnItem.totalAmount ?? grnItem.amount) || 0).toFixed(2)}</div>
+                          </div>
+                          <div className="col-span-2 space-y-1 min-w-0">
                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Remarks</label>
                             <input
                               type="text"
                               placeholder="Remarks"
-                              className="w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold bg-white disabled:opacity-50"
+                              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold bg-white disabled:opacity-50"
                               value={grnItem.remarks ?? ''}
                               onChange={e => updateGrnItem(grnItem.id, 'remarks', e.target.value)}
                               disabled={!!grnForm.id}
@@ -1405,17 +1488,11 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                 {/* Tax & Amount Summary (INR) - GRN */}
                 <div className="col-span-2 bg-slate-50 p-6 rounded-3xl border border-slate-200 mt-4 space-y-4">
                   <h4 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] border-b border-slate-200 pb-2">Tax & Amount Summary (INR)</h4>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
                     <div className="space-y-1">
                       <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Base Amount</label>
                       <div className="text-sm font-bold text-slate-700">
                         ₹{(grnForm.items || []).reduce((sum, i) => sum + (Number(i.amount) || 0), 0).toFixed(2)}
-                      </div>
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total TDS Amount</label>
-                      <div className="text-sm font-bold text-red-500">
-                        -₹{(grnForm.items || []).reduce((sum, i) => sum + (i.tdsAmount || 0), 0).toFixed(2)}
                       </div>
                     </div>
                     <div className="space-y-1">
@@ -1427,7 +1504,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                     <div className="space-y-1">
                       <label className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">Net Total Amount</label>
                       <div className="text-lg font-black text-indigo-700">
-                        ₹{(Number(grnForm.amount) || 0).toFixed(2)}
+                        ₹{(grnForm.items || []).reduce((sum, i) => sum + (Number(i.totalAmount) || 0), 0).toFixed(2)}
                       </div>
                     </div>
                   </div>
@@ -1518,19 +1595,20 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                   </div>
                   <div className="space-y-3">
                     {selectedGRN.items.map((grnItem) => {
-                      const invItem = invoiceForm.items?.find(i => i.id === grnItem.id) || { ...grnItem, quantity: grnItem.quantity };
+                      const invItem = invoiceForm.items?.find(i => i.id === grnItem.id) || { ...grnItem, quantity: grnItem.quantity, gst: grnItem.gst ?? 0, tds: grnItem.tds ?? 0 };
+                      const base = (Number(invItem.quantity) || 0) * (Number(invItem.rate) || 0);
                       return (
-                        <div key={grnItem.id} className="grid grid-cols-12 gap-4 items-center bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
-                          <div className="col-span-6">
-                            <label className="text-[10px] font-black text-slate-400 uppercase">Item</label>
-                            <div className="text-sm font-bold text-slate-700">{grnItem.itemName}</div>
-                            <div className="text-[10px] text-emerald-500 font-black">GRN Qty: {grnItem.quantity} | Rate: ₹{grnItem.rate}</div>
+                        <div key={grnItem.id} className="grid grid-cols-12 gap-2 items-end bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                          <div className="col-span-2 space-y-1 min-w-0">
+                            <label className="text-[10px] font-black text-slate-400 uppercase">Item Name</label>
+                            <div className="text-sm font-bold text-slate-700 truncate">{invItem.itemName}</div>
                           </div>
-                          <div className="col-span-3 space-y-1">
-                            <label className="text-[10px] font-black text-slate-400 uppercase">Invoice Qty</label>
-                            <input 
+                          <div className="col-span-1 space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase">Qty</label>
+                            <input
                               type="number"
-                              className={`w-full bg-white border rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 ${invItem.quantity > grnItem.quantity ? 'border-red-500' : 'border-slate-200'}`}
+                              min={0}
+                              className={`w-full bg-white border rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 ${(Number(invItem.quantity) || 0) > grnItem.quantity ? 'border-red-500' : 'border-slate-200'}`}
                               value={invItem.quantity}
                               onChange={e => {
                                 const qty = Number(e.target.value);
@@ -1538,37 +1616,87 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                                   alert(`Invoice quantity (${qty}) cannot be greater than GRN quantity (${grnItem.quantity})`);
                                   return;
                                 }
-                                const updatedItems = [...(invoiceForm.items || [])];
-                                const index = updatedItems.findIndex(i => i.id === grnItem.id);
-                                
-                                const base = qty * grnItem.rate;
-                                const tdsAmount = base * ((grnItem.tds || 0) / 100);
-                                const gstAmount = base * ((grnItem.gst || 0) / 100);
-                                const totalAmount = base + gstAmount - tdsAmount;
-                                
-                                const newItem: ItemLine = { 
-                                  ...grnItem, 
-                                  quantity: qty, 
-                                  amount: base,
-                                  tdsAmount,
-                                  gstAmount,
-                                  totalAmount
-                                };
-                                if (index > -1) updatedItems[index] = newItem;
-                                else updatedItems.push(newItem);
-                                
-                                setInvoiceForm({ ...invoiceForm, items: updatedItems });
+                                updateInvoiceItem(grnItem.id, 'quantity', qty);
                               }}
                             />
-                            {invItem.quantity > grnItem.quantity && <div className="text-[8px] text-red-500 font-bold uppercase">Exceeds GRN Qty</div>}
+                            {(Number(invItem.quantity) || 0) > grnItem.quantity && <div className="text-[8px] text-red-500 font-bold uppercase">Exceeds GRN Qty</div>}
                           </div>
-                          <div className="col-span-3 space-y-1">
-                            <label className="text-[10px] font-black text-slate-400 uppercase">Amount (INR)</label>
-                            <div className="text-sm font-black text-emerald-600">₹{invItem.totalAmount?.toFixed(2)}</div>
+                          <div className="col-span-1 space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase">Base Amount</label>
+                            <div className="text-sm font-bold text-slate-700">₹{(Number(invItem.amount) || base).toFixed(2)}</div>
+                          </div>
+                          <div className="col-span-1 space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase">GST</label>
+                            <select
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                              value={invItem.gst ?? ''}
+                              onChange={e => updateInvoiceItem(grnItem.id, 'gst', Number(e.target.value))}
+                            >
+                              <option value="">Select GST</option>
+                              {(masters['GST'] ?? masters.GST ?? []).map((g: { id: string; name: string; rate: number }) => (
+                                <option key={g.id} value={g.rate}>{g.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="col-span-1 space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase">GST Amount</label>
+                            <div className="text-sm font-bold text-slate-700">₹{(Number(invItem.gstAmount) || 0).toFixed(2)}</div>
+                          </div>
+                          <div className="col-span-1 space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase">TDS</label>
+                            <select
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                              value={invItem.tds ?? ''}
+                              onChange={e => updateInvoiceItem(grnItem.id, 'tds', Number(e.target.value))}
+                            >
+                              <option value="">Select TDS</option>
+                              {(masters['TDS'] ?? masters.TDS ?? []).map((t: { id: string; name: string; rate: number }) => (
+                                <option key={t.id} value={t.rate}>{t.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="col-span-1 space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase">TDS Amount</label>
+                            <div className="text-sm font-bold text-red-600">₹{(Number(invItem.tdsAmount) || 0).toFixed(2)}</div>
+                          </div>
+                          <div className="col-span-1 space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase">Net Amount</label>
+                            <div className="text-sm font-black text-indigo-600">₹{(Number(invItem.totalAmount) ?? base).toFixed(2)}</div>
                           </div>
                         </div>
                       );
                     })}
+                  </div>
+                </div>
+
+                {/* Tax & Amount Summary (INR) - Invoice */}
+                <div className="col-span-2 bg-slate-50 p-6 rounded-3xl border border-slate-200 mt-4 space-y-4">
+                  <h4 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] border-b border-slate-200 pb-2">Tax & Amount Summary (INR)</h4>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Base Amount</label>
+                      <div className="text-sm font-bold text-slate-700">
+                        ₹{(invoiceForm.items || []).reduce((sum, i) => sum + (Number(i.amount) || 0), 0).toFixed(2)}
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total TDS Amount</label>
+                      <div className="text-sm font-bold text-red-500">
+                        -₹{(invoiceForm.items || []).reduce((sum, i) => sum + (i.tdsAmount || 0), 0).toFixed(2)}
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total GST Amount</label>
+                      <div className="text-sm font-bold text-emerald-500">
+                        +₹{(invoiceForm.items || []).reduce((sum, i) => sum + (i.gstAmount || 0), 0).toFixed(2)}
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">Net Total Amount</label>
+                      <div className="text-lg font-black text-indigo-700">
+                        ₹{(invoiceForm.items || []).reduce((sum, i) => sum + (Number(i.totalAmount) || 0), 0).toFixed(2)}
+                      </div>
+                    </div>
                   </div>
                 </div>
               </>
@@ -1808,7 +1936,17 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                             <button 
                               onClick={() => { 
                                 setSelectedPO(po || null); 
-                                setSelectedGRN(grn); 
+                                setSelectedGRN(grn);
+                                setInvoiceForm({
+                                  entityName: grn.entityName,
+                                  vendorSiteId: grn.vendorSiteId || '',
+                                  location: grn.location || '',
+                                  shippingAddressId: grn.shippingAddressId || '',
+                                  billingAddressId: grn.billingAddressId || '',
+                                  items: (grn.items || []).map(i => ({ ...i })),
+                                  amount: Number(grn.amount) || 0,
+                                  attachments: []
+                                });
                                 setShowForm(true); 
                               }}
                               className="text-xs font-black text-indigo-600 hover:underline"

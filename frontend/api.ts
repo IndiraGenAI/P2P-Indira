@@ -5,6 +5,7 @@
  */
 const API_BASE = '/api/';
 const TOKEN_KEY = 'p2p_token';
+const LOGIN_TIME_KEY = 'p2p_login_time';
 
 function getAuthHeaders(): Record<string, string> {
   const headers: Record<string, string> = {};
@@ -21,9 +22,44 @@ export function setToken(token: string): void {
   localStorage.setItem(TOKEN_KEY, token);
 }
 
+export interface ApiError extends Error {
+  code?: string;
+}
+
+async function handleErrorResponse(res: Response, text: string): Promise<never> {
+  if (res.status === 401) {
+    try {
+      const j = JSON.parse(text);
+      if (j.code === 'SESSION_EXPIRED') {
+        clearToken();
+        sessionStorage.removeItem(LOGIN_TIME_KEY);
+        window.location.href = '/login?expired=true';
+      }
+    } catch {
+      // not JSON, fall through to throw
+    }
+    throw new Error(text || 'Unauthorized');
+  }
+  if (res.status === 503) {
+    try {
+      const j = JSON.parse(text);
+      const err = new Error(j.error || j.message || text) as ApiError;
+      err.code = j.code;
+      throw err;
+    } catch (e) {
+      if (e instanceof Error) throw e;
+      throw new Error(text || 'Service Unavailable');
+    }
+  }
+  throw new Error(text || res.statusText);
+}
+
 export async function apiGet<T = unknown>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { headers: getAuthHeaders() });
-  if (!res.ok) throw new Error(await res.text().catch(() => res.statusText));
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    await handleErrorResponse(res, text);
+  }
   return res.json();
 }
 
@@ -33,7 +69,10 @@ export async function apiPost<T = unknown>(path: string, body?: unknown): Promis
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: body != null ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) throw new Error(await res.text().catch(() => res.statusText));
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    await handleErrorResponse(res, text);
+  }
   return res.json();
 }
 
@@ -43,6 +82,22 @@ export async function apiPut<T = unknown>(path: string, body?: unknown): Promise
     headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: body != null ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) throw new Error(await res.text().catch(() => res.statusText));
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    await handleErrorResponse(res, text);
+  }
+  return res.json();
+}
+
+export async function apiPatch<T = unknown>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+    body: body != null ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    await handleErrorResponse(res, text);
+  }
   return res.json();
 }

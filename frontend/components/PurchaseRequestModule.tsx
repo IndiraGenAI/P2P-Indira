@@ -31,6 +31,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
     transactionType: getItemTypesFromMasters(masters)[0]?.name ?? '',
     validFrom: '',
     validTo: '',
+    requiredDate: '',
     frequency: 'One-Time',
     department: '',
     subDepartment: '',
@@ -40,8 +41,6 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
     amount: 0,
     remarks: '',
     attachments: [],
-    shippingAddressId: '',
-    billingAddressId: '',
     isUnbudgeted: false,
     unbudgetedJustification: ''
   });
@@ -148,11 +147,10 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
   const resetForm = () => {
     setPrForm({
       entityName: masters.Entity?.[0]?.name || '',
-      vendorId: '', vendorSiteId: '', transactionType: getItemTypesFromMasters(masters)[0]?.name ?? '', validFrom: '', validTo: '',
+      vendorId: '', vendorSiteId: '', transactionType: getItemTypesFromMasters(masters)[0]?.name ?? '', validFrom: '', validTo: '', requiredDate: '',
       frequency: 'One-Time', department: '', subDepartment: '', paymentTerms: '',
       centerNames: [], items: [{ id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, remarks: '', coaCode: '' }],
       amount: 0, remarks: '', attachments: [],
-      shippingAddressId: '', billingAddressId: '',
       isUnbudgeted: false, unbudgetedJustification: ''
     });
   };
@@ -315,32 +313,6 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
               </select>
             </div>
             <div className="space-y-2">
-              <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Shipping Address</label>
-              <select 
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
-                value={prForm.shippingAddressId}
-                onChange={e => setPrForm({ ...prForm, shippingAddressId: e.target.value })}
-              >
-                <option value="">Select Shipping Address</option>
-                {masters.Entity.flatMap(ent => ent.shippingAddresses || []).map((addr: any) => (
-                  <option key={addr.id} value={addr.id}>{addr.address}</option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-2">
-              <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Billing Address</label>
-              <select 
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
-                value={prForm.billingAddressId}
-                onChange={e => setPrForm({ ...prForm, billingAddressId: e.target.value })}
-              >
-                <option value="">Select Billing Address</option>
-                {masters.Entity.flatMap(ent => ent.billingAddresses || []).map((addr: any) => (
-                  <option key={addr.id} value={addr.id}>{addr.address}</option>
-                ))}
-              </select>
-            </div>
-            <div className="space-y-2">
               <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Item type</label>
               <select 
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
@@ -369,6 +341,15 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
                 value={prForm.validTo}
                 onChange={e => setPrForm({ ...prForm, validTo: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Required Date</label>
+              <input 
+                type="date" 
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
+                value={prForm.requiredDate || ''}
+                onChange={e => setPrForm({ ...prForm, requiredDate: e.target.value })}
               />
             </div>
             <div className="space-y-2">
@@ -487,7 +468,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
               <div className="space-y-3">
                 {prForm.items?.map((item, idx) => (
                   <div key={item.id} className="grid grid-cols-12 gap-4 items-end bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                    <div className="col-span-4 space-y-1">
+                    <div className="col-span-3 space-y-1">
                       <label className="text-[10px] font-black text-slate-400 uppercase">Item Name</label>
                       <select 
                         className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
@@ -500,7 +481,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
                         ))}
                       </select>
                     </div>
-                    <div className="col-span-2 space-y-1">
+                    <div className="col-span-1 space-y-1">
                       <label className="text-[10px] font-black text-slate-400 uppercase">Qty</label>
                       <input 
                         type="number"
@@ -517,6 +498,12 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
                         value={item.rate}
                         onChange={e => updateItem(item.id, 'rate', Number(e.target.value))}
                       />
+                    </div>
+                    <div className="col-span-2 space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase">Amount</label>
+                      <div className="w-full bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-slate-700">
+                        ₹{(Number(item.amount) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      </div>
                     </div>
                     <div className="col-span-3 space-y-1">
                       <label className="text-[10px] font-black text-slate-400 uppercase">Remarks</label>

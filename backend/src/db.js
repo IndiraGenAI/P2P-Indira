@@ -9,6 +9,8 @@ const pool = new Pool({
   user: process.env.PG_USER,
   password: process.env.PG_PASSWORD,
   ssl: process.env.PG_SSL === 'true' ? { rejectUnauthorized: false } : false,
+  max: parseInt(process.env.DB_POOL_MAX || '50', 10),
+  min: parseInt(process.env.DB_POOL_MIN || '10', 10),
 });
 
 function toCamel(str) {
