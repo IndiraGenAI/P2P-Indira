@@ -1232,21 +1232,6 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                         </div>
                       </div>
                     </div>
-
-                    <div className="grid grid-cols-3 gap-4 pt-4 border-t border-slate-200/50">
-                      <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
-                        <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-1">Total CGST</label>
-                        <div className="text-xs font-bold text-slate-600">₹{(poForm.items || []).reduce((sum, i) => sum + (i.cgst || 0), 0).toFixed(2)}</div>
-                      </div>
-                      <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
-                        <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-1">Total SGST</label>
-                        <div className="text-xs font-bold text-slate-600">₹{(poForm.items || []).reduce((sum, i) => sum + (i.sgst || 0), 0).toFixed(2)}</div>
-                      </div>
-                      <div className="bg-white p-3 rounded-xl border border-slate-100 shadow-sm">
-                        <label className="text-[8px] font-black text-slate-400 uppercase tracking-widest block mb-1">Total IGST</label>
-                        <div className="text-xs font-bold text-slate-600">₹{(poForm.items || []).reduce((sum, i) => sum + (i.igst || 0), 0).toFixed(2)}</div>
-                      </div>
-                    </div>
                   </div>
                 </div>
 

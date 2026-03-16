@@ -17,6 +17,7 @@ const JSON_COLUMNS = {
   purchase_orders: ['centerNames', 'items', 'attachments'],
   grns: ['items', 'attachments'],
   invoices: ['items', 'attachments'],
+  direct_invoices: ['items', 'attachments'],
 };
 
 // Generic handler: GET all from table, return camelCase rows with parsed JSON columns
@@ -513,6 +514,39 @@ router.post('/invoices', async (req, res) => {
         })();
     await buildUpsert('invoices', 'id', INV_COLS, body);
     const rows = await getAll('invoices');
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- DIRECT INVOICES (standalone; no GRN link) ---
+const DIRECT_INV_COLS = ['id', 'entity_name', 'vendor_site_id', 'location', 'department', 'sub_department', 'invoice_number', 'invoice_date', 'items', 'amount', 'status', 'current_step_index', 'rejection_remarks', 'created_by', 'created_at', 'center_names', 'attachments', 'shipping_address_id', 'billing_address_id', 'tds', 'gst'];
+router.get('/direct-invoices', async (req, res) => {
+  try {
+    const rows = await getAll('direct_invoices');
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+router.post('/direct-invoices', async (req, res) => {
+  try {
+    const body = Array.isArray(req.body)
+      ? req.body.map((row) => {
+          const r = { ...row };
+          if (r.invoiceDate === '') r.invoiceDate = null;
+          if (r.createdAt === '') r.createdAt = null;
+          return r;
+        })
+      : (() => {
+          const r = { ...req.body };
+          if (r.invoiceDate === '') r.invoiceDate = null;
+          if (r.createdAt === '') r.createdAt = null;
+          return r;
+        })();
+    await buildUpsert('direct_invoices', 'id', DIRECT_INV_COLS, body);
+    const rows = await getAll('direct_invoices');
     res.json(rows);
   } catch (e) {
     res.status(500).json({ error: e.message });

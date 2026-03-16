@@ -16,10 +16,11 @@ interface DirectInvoiceModuleProps {
   workflows: WorkflowRule[];
   budgets: Budget[];
   setBudgets: React.Dispatch<React.SetStateAction<Budget[]>>;
+  directInvoices: Invoice[];
+  setDirectInvoices: React.Dispatch<React.SetStateAction<Invoice[]>>;
 }
 
-const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, currentUser, workflows, budgets, setBudgets }) => {
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
+const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, currentUser, workflows, budgets, setBudgets, directInvoices, setDirectInvoices }) => {
   const [showForm, setShowForm] = useState(false);
   
   // Form states
@@ -33,7 +34,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
     department: '',
     subDepartment: '',
     centerNames: [],
-    items: [{ id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, remarks: '' }],
+    items: [{ id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, tds: 0, gst: 0, remarks: '', coaCode: '' }],
     tds: 0,
     gst: 0,
     amount: 0,
@@ -44,49 +45,6 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
     isUnbudgeted: false,
     unbudgetedJustification: ''
   });
-
-  // Recalculate all items when top-level TDS or GST changes
-  useEffect(() => {
-    setInvoiceForm((prev: any) => {
-      const vendor = (masters.Vendor ?? []).find(v => v.id === prev.vendorId);
-      const center = (masters.Center ?? []).find(c => c.name === prev.centerNames?.[0]);
-      const isIntraState = vendor && center && vendor.state === center.state;
-      const tdsPercent = prev.tds || 0;
-      const gstPercent = prev.gst || 0;
-
-      const updatedItems = (prev.items || []).map((item: any) => {
-        const qty = item.quantity || 0;
-        const rate = item.rate || 0;
-        const baseAmount = qty * rate;
-        const tdsAmount = baseAmount * (tdsPercent / 100);
-        const gstAmount = baseAmount * (gstPercent / 100);
-        
-        const updated = { 
-          ...item, 
-          amount: baseAmount,
-          tds: tdsPercent,
-          gst: gstPercent,
-          tdsAmount,
-          gstAmount
-        };
-        
-        if (isIntraState) {
-          updated.cgst = gstAmount / 2;
-          updated.sgst = gstAmount / 2;
-          updated.igst = 0;
-        } else {
-          updated.cgst = 0;
-          updated.sgst = 0;
-          updated.igst = gstAmount;
-        }
-        
-        updated.totalAmount = baseAmount + gstAmount - tdsAmount;
-        return updated;
-      });
-
-      return { ...prev, items: updatedItems };
-    });
-  }, [invoiceForm.tds, invoiceForm.gst, invoiceForm.vendorId, invoiceForm.centerNames]);
 
   // Update total amount whenever items change
   useEffect(() => {
@@ -110,46 +68,37 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
 
   const updateItem = (id: string, field: keyof ItemLine, value: any) => {
     setInvoiceForm((prev: any) => {
-      const vendor = (masters.Vendor ?? []).find(v => v.id === prev.vendorId);
-      const center = (masters.Center ?? []).find(c => c.name === prev.centerNames?.[0]);
-      const isIntraState = vendor && center && vendor.state === center.state;
-      const tdsPercent = prev.tds || 0;
-      const gstPercent = prev.gst || 0;
+      const vendor = (masters.Vendor ?? []).find((v: any) => v.id === prev.vendorId);
+      const center = (masters.Center ?? []).find((c: any) => c.name === prev.centerNames?.[0]);
+      const isIntraState = vendor && center && (vendor as any).state === (center as any).state;
 
       return {
         ...prev,
         items: (prev.items || []).map((item: any) => {
-          if (item.id === id) {
-            const updated = { ...item, [field]: value };
-            if (field === 'quantity' || field === 'rate' || field === 'tds' || field === 'gst') {
-              const qty = updated.quantity || 0;
-              const rate = updated.rate || 0;
-              
-              const baseAmount = qty * rate;
-              const tdsAmount = baseAmount * (tdsPercent / 100);
-              const gstAmount = baseAmount * (gstPercent / 100);
-              
-              updated.amount = baseAmount;
-              updated.tds = tdsPercent;
-              updated.gst = gstPercent;
-              updated.tdsAmount = tdsAmount;
-              updated.gstAmount = gstAmount;
-              
-              if (isIntraState) {
-                updated.cgst = gstAmount / 2;
-                updated.sgst = gstAmount / 2;
-                updated.igst = 0;
-              } else {
-                updated.cgst = 0;
-                updated.sgst = 0;
-                updated.igst = gstAmount;
-              }
-              
-              updated.totalAmount = baseAmount + gstAmount - tdsAmount;
-            }
-            return updated;
+          if (item.id !== id) return item;
+          const updated = { ...item, [field]: value };
+          if (field === 'itemName' || field === 'remarks' || field === 'coaCode') return updated;
+          const qty = Number(updated.quantity) || 0;
+          const rate = Number(updated.rate) || 0;
+          const baseAmount = qty * rate;
+          const tdsPercent = Number(updated.tds) || 0;
+          const gstPercent = Number(updated.gst) || 0;
+          const tdsAmount = baseAmount * (tdsPercent / 100);
+          const gstAmount = baseAmount * (gstPercent / 100);
+          updated.amount = baseAmount;
+          updated.tdsAmount = tdsAmount;
+          updated.gstAmount = gstAmount;
+          if (isIntraState) {
+            updated.cgst = gstAmount / 2;
+            updated.sgst = gstAmount / 2;
+            updated.igst = 0;
+          } else {
+            updated.cgst = 0;
+            updated.sgst = 0;
+            updated.igst = gstAmount;
           }
-          return item;
+          updated.totalAmount = baseAmount + gstAmount - tdsAmount;
+          return updated;
         })
       };
     });
@@ -243,7 +192,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
       currentStepIndex: 0,
       createdAt: new Date().toISOString(),
     };
-    setInvoices([...invoices, newInvoice]);
+    setDirectInvoices([...directInvoices, newInvoice]);
     setShowForm(false);
     resetForm();
   };
@@ -272,7 +221,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
     if ((inv as any).isUnbudgeted) return;
 
     setBudgets(prev => prev.map(budget => {
-      const invItemsForGL = inv.items.filter(i => i.coaCode === budget.coaCode);
+      const invItemsForGL = inv.items?.filter(i => i.coaCode === budget.coaCode) ?? [];
       if (invItemsForGL.length > 0) {
         const totalForGL = invItemsForGL.reduce((sum, i) => sum + (i.totalAmount || i.amount), 0);
         return { ...budget, consumedAmount: budget.consumedAmount + totalForGL };
@@ -292,7 +241,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
       department: '',
       subDepartment: '',
       centerNames: [],
-      items: [{ id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, remarks: '', coaCode: '' }],
+      items: [{ id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, tds: 0, gst: 0, remarks: '', coaCode: '' }],
       tds: 0,
       gst: 0,
       amount: 0,
@@ -362,7 +311,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
   };
 
   const completeReviewInvoice = (id: string) => {
-    setInvoices(invoices.map(inv => {
+    setDirectInvoices(directInvoices.map(inv => {
       if (inv.id !== id) return inv;
       const rule = workflows.find(w =>
         w.entityName === inv.entityName &&
@@ -378,7 +327,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
   };
 
   const approveInvoice = (id: string) => {
-    setInvoices(invoices.map(inv => {
+    setDirectInvoices(directInvoices.map(inv => {
       if (inv.id !== id) return inv;
 
       const rule = workflows.find(w => 
@@ -406,7 +355,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
   };
 
   const reverseInvoice = (id: string) => {
-    setInvoices(invoices.map(inv => inv.id === id ? { ...inv, status: 'Reversed' } : inv));
+    setDirectInvoices(directInvoices.map(inv => inv.id === id ? { ...inv, status: 'Reversed' } : inv));
     alert('Direct Invoice reversed. You can now recreate it.');
   };
 
@@ -581,29 +530,6 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
               />
             </div>
 
-            <div className="space-y-2">
-              <label className="text-xs font-black text-slate-500 uppercase tracking-wider">TDS %</label>
-              <select 
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
-                value={invoiceForm.tds}
-                onChange={e => setInvoiceForm({ ...invoiceForm, tds: Number(e.target.value) })}
-              >
-                <option value="0">Select TDS</option>
-                {(masters.TDS ?? []).map(t => <option key={t.id} value={t.rate}>{t.name}</option>)}
-              </select>
-            </div>
-            <div className="space-y-2">
-              <label className="text-xs font-black text-slate-500 uppercase tracking-wider">GST %</label>
-              <select 
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
-                value={invoiceForm.gst}
-                onChange={e => setInvoiceForm({ ...invoiceForm, gst: Number(e.target.value) })}
-              >
-                <option value="0">Select GST</option>
-                {(masters.GST ?? []).map(g => <option key={g.id} value={g.rate}>{g.name}</option>)}
-              </select>
-            </div>
-
             {/* Items Section */}
             <div className="col-span-2 space-y-4">
               <div className="flex justify-between items-center">
@@ -627,58 +553,92 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
               <div className="space-y-4">
                 {invoiceForm.items?.map((item: any) => (
                   <div key={item.id} className="bg-slate-50 p-6 rounded-3xl border border-slate-100 space-y-4">
-                    <div className="grid grid-cols-12 gap-4 items-end">
+                    <div className="grid grid-cols-12 gap-3 items-end">
                       <div className="col-span-2 space-y-1">
                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Item Name</label>
                         <select 
-                          className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                          className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
                           value={item.itemName}
                           onChange={e => updateItem(item.id, 'itemName', e.target.value)}
                         >
                           <option value="">Select Item</option>
-                          {(masters.Item ?? []).filter(i => !invoiceForm.items?.some((selected: any) => selected.id !== item.id && selected.itemName === i.name)).map(i => <option key={i.id} value={i.name}>{i.name}</option>)}
+                          {(masters.Item ?? []).filter((i: any) => !invoiceForm.items?.some((selected: any) => selected.id !== item.id && selected.itemName === i.name)).map((i: any) => <option key={i.id} value={i.name}>{i.name}</option>)}
                         </select>
                       </div>
                       <div className="col-span-1 space-y-1">
                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Qty</label>
                         <input 
                           type="number"
-                          className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                          className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
                           value={item.quantity}
                           onChange={e => updateItem(item.id, 'quantity', Number(e.target.value))}
                         />
                       </div>
-                      <div className="col-span-2 space-y-1">
-                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Rate (INR)</label>
+                      <div className="col-span-1 space-y-1">
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Rate</label>
                         <input 
                           type="number"
-                          className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                          className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
                           value={item.rate}
                           onChange={e => updateItem(item.id, 'rate', Number(e.target.value))}
                         />
                       </div>
-                      <div className="col-span-2 space-y-1">
+                      <div className="col-span-1 space-y-1">
                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Base Amount</label>
                         <input 
-                          type="number"
+                          type="text"
                           readOnly
-                          className="w-full bg-slate-100 border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-black text-slate-600"
-                          value={item.amount?.toFixed(2)}
+                          className="w-full bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 text-sm font-black text-slate-600"
+                          value={(Number(item.amount) || 0).toFixed(2)}
                         />
                       </div>
-                      <div className="col-span-3 space-y-1">
+                      <div className="col-span-1 space-y-1">
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">GST %</label>
+                        <select 
+                          className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                          value={item.gst ?? ''}
+                          onChange={e => updateItem(item.id, 'gst', Number(e.target.value))}
+                        >
+                          <option value="">Select GST</option>
+                          {(masters.GST ?? []).map((g: any) => <option key={g.id} value={g.rate}>{g.name}</option>)}
+                        </select>
+                      </div>
+                      <div className="col-span-1 space-y-1">
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">GST Amount</label>
+                        <div className="w-full bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 text-sm font-black text-emerald-600">₹{(Number(item.gstAmount) || 0).toFixed(2)}</div>
+                      </div>
+                      <div className="col-span-1 space-y-1">
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">TDS Section</label>
+                        <select 
+                          className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                          value={item.tds ?? ''}
+                          onChange={e => updateItem(item.id, 'tds', Number(e.target.value))}
+                        >
+                          <option value="">Select TDS</option>
+                          {(masters.TDS ?? []).map((t: any) => <option key={t.id} value={t.rate}>{t.name}</option>)}
+                        </select>
+                      </div>
+                      <div className="col-span-1 space-y-1">
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">TDS amount</label>
+                        <div className="w-full bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 text-sm font-black text-red-600">₹{(Number(item.tdsAmount) || 0).toFixed(2)}</div>
+                      </div>
+                      <div className="col-span-1 space-y-1">
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Net Amount</label>
+                        <div className="w-full bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 text-sm font-black text-indigo-600">₹{(Number(item.totalAmount) || 0).toFixed(2)}</div>
+                      </div>
+                      <div className="col-span-2 space-y-1">
                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Remarks <span className="text-red-500">*</span></label>
                         <input 
                           type="text"
                           placeholder="Remarks"
-                          className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                          className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
                           value={item.remarks}
                           onChange={e => updateItem(item.id, 'remarks', e.target.value)}
                         />
                       </div>
                       <div className="col-span-1 flex justify-center pb-1">
                         {invoiceForm.items.length > 1 && (
-                          <button onClick={() => removeItem(item.id)} className="text-red-400 hover:text-red-600 transition-colors p-2 hover:bg-red-50 rounded-xl">
+                          <button onClick={() => removeItem(item.id)} className="text-red-400 hover:text-red-600 transition-colors p-2 hover:bg-red-50 rounded-xl" title="Remove item">
                             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
                           </button>
                         )}
@@ -693,19 +653,19 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
                   <div className="space-y-1">
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Base Amount</label>
-                    <div className="text-sm font-bold text-slate-700">₹{(invoiceForm.items || []).reduce((sum: number, i: any) => sum + (i.amount || 0), 0).toFixed(2)}</div>
+                    <div className="text-sm font-bold text-slate-700">₹{(invoiceForm.items || []).reduce((sum: number, i: any) => sum + (Number(i.amount) || 0), 0).toFixed(2)}</div>
                   </div>
                   <div className="space-y-1">
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total TDS</label>
-                    <div className="text-sm font-bold text-red-500">-₹{(invoiceForm.items || []).reduce((sum: number, i: any) => sum + (i.tdsAmount || 0), 0).toFixed(2)}</div>
+                    <div className="text-sm font-bold text-red-500">-₹{(invoiceForm.items || []).reduce((sum: number, i: any) => sum + (Number(i.tdsAmount) || 0), 0).toFixed(2)}</div>
                   </div>
                   <div className="space-y-1">
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total GST</label>
-                    <div className="text-sm font-bold text-emerald-500">+₹{(invoiceForm.items || []).reduce((sum: number, i: any) => sum + (i.gstAmount || 0), 0).toFixed(2)}</div>
+                    <div className="text-sm font-bold text-emerald-500">+₹{(invoiceForm.items || []).reduce((sum: number, i: any) => sum + (Number(i.gstAmount) || 0), 0).toFixed(2)}</div>
                   </div>
                   <div className="space-y-1">
                     <label className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">Net Amount</label>
-                    <div className="text-lg font-black text-indigo-700">₹{invoiceForm.amount?.toFixed(2)}</div>
+                    <div className="text-lg font-black text-indigo-700">₹{(Number(invoiceForm.amount) || 0).toFixed(2)}</div>
                   </div>
                 </div>
               </div>
@@ -768,17 +728,17 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {invoices.length === 0 ? (
+              {directInvoices.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-6 py-12 text-center text-slate-400 font-medium italic">No direct invoices found. Create one to get started.</td>
                 </tr>
               ) : (
-                invoices.map(inv => (
+                directInvoices.map(inv => (
                   <tr key={inv.id} className="hover:bg-slate-50/50 transition-colors">
                     <td className="px-6 py-4 font-black text-slate-700">{inv.id}</td>
                     <td className="px-6 py-4 font-bold text-slate-600">{(masters.Vendor ?? []).find(v => v.id === (inv as any).vendorId)?.name || 'Unknown'}</td>
                     <td className="px-6 py-4 text-slate-500 font-medium">{new Date(inv.createdAt).toLocaleDateString()}</td>
-                    <td className="px-6 py-4 font-black text-indigo-600">₹{inv.amount.toFixed(2)}</td>
+                    <td className="px-6 py-4 font-black text-indigo-600">₹{(Number(inv.amount) || 0).toFixed(2)}</td>
                     <td className="px-6 py-4">
                       <div className="flex flex-col space-y-1">
                         <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider w-fit ${

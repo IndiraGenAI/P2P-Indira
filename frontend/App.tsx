@@ -55,6 +55,7 @@ const App: React.FC = () => {
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
   const [grns, setGrns] = useState<GRN[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [directInvoices, setDirectInvoices] = useState<Invoice[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [budgetAmendments, setBudgetAmendments] = useState<BudgetAmendment[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
@@ -81,7 +82,7 @@ const App: React.FC = () => {
 
   const loadData = async () => {
     try {
-      const [rolesRes, usersRes, workflowsRes, wv2Res, prRes, rcRes, poRes, grnsRes, invRes, budgetsRes, amendRes, mastersRes] = await Promise.all([
+      const [rolesRes, usersRes, workflowsRes, wv2Res, prRes, rcRes, poRes, grnsRes, invRes, directInvRes, budgetsRes, amendRes, mastersRes] = await Promise.all([
         apiGet<Role[]>('roles'),
         apiGet<User[]>('users'),
         apiGet<WorkflowRule[]>('workflows'),
@@ -91,6 +92,7 @@ const App: React.FC = () => {
         apiGet<PurchaseOrder[]>('purchase-orders'),
         apiGet<GRN[]>('grns'),
         apiGet<Invoice[]>('invoices'),
+        apiGet<Invoice[]>('direct-invoices'),
         apiGet<Budget[]>('budgets'),
         apiGet<BudgetAmendment[]>('budget-amendments'),
         apiGet<Record<string, MasterRecord[]>>('masters'),
@@ -104,6 +106,7 @@ const App: React.FC = () => {
       setPurchaseOrders(Array.isArray(poRes) ? poRes : []);
       setGrns(Array.isArray(grnsRes) ? grnsRes : []);
       setInvoices(Array.isArray(invRes) ? invRes : []);
+      setDirectInvoices(Array.isArray(directInvRes) ? directInvRes : []);
       setBudgets(Array.isArray(budgetsRes) ? budgetsRes : []);
       setBudgetAmendments(Array.isArray(amendRes) ? amendRes : []);
       setMasters(mastersRes && typeof mastersRes === 'object' ? mastersRes as Record<MasterType, MasterRecord[]> : {});
@@ -213,6 +216,10 @@ const App: React.FC = () => {
     if (!initialFetchDone.current) return;
     apiPost('invoices', invoices).catch(console.error);
   }, [invoices]);
+  useEffect(() => {
+    if (!initialFetchDone.current) return;
+    apiPost('direct-invoices', directInvoices).catch(console.error);
+  }, [directInvoices]);
   useEffect(() => {
     if (!initialFetchDone.current) return;
     apiPost('budgets', budgets.map(b => ({ ...b, costCenterName: b.costCenterName ?? '' }))).catch(console.error);
@@ -366,6 +373,8 @@ const App: React.FC = () => {
             workflows={workflows}
             budgets={budgets}
             setBudgets={setBudgets}
+            directInvoices={directInvoices}
+            setDirectInvoices={setDirectInvoices}
           />
         );
       case 'budgets':

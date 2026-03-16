@@ -257,7 +257,8 @@ export interface GRN {
 export interface Invoice {
   id: string;
   entityName: string;
-  grnId: string;
+  /** Set for PO/GRN-based invoices; absent for direct invoices. */
+  grnId?: string;
   vendorSiteId?: string;
   location: string;
   department?: string;
