@@ -107,7 +107,11 @@ const App: React.FC = () => {
       setGrns(Array.isArray(grnsRes) ? grnsRes : []);
       setInvoices(Array.isArray(invRes) ? invRes : []);
       setDirectInvoices(Array.isArray(directInvRes) ? directInvRes : []);
-      setBudgets(Array.isArray(budgetsRes) ? budgetsRes : []);
+      setBudgets(Array.isArray(budgetsRes) ? budgetsRes.map((b: any) => ({
+        ...b,
+        amount: Number(b.amount) || 0,
+        consumedAmount: Math.max(0, Number(b.consumedAmount) || 0)
+      })) : []);
       setBudgetAmendments(Array.isArray(amendRes) ? amendRes : []);
       setMasters(mastersRes && typeof mastersRes === 'object' ? mastersRes as Record<MasterType, MasterRecord[]> : {});
       initialFetchDone.current = true;
@@ -242,7 +246,12 @@ const App: React.FC = () => {
   }, [workflows]);
   useEffect(() => {
     if (!initialFetchDone.current) return;
-    apiPost('masters', masters).catch(console.error);
+    apiPost('masters', masters)
+      .then((res) => {
+        if (res && typeof res === 'object' && !('error' in res))
+          setMasters(res as Record<MasterType, MasterRecord[]>);
+      })
+      .catch(console.error);
   }, [masters]);
 
   useEffect(() => {

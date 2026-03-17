@@ -100,7 +100,12 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
 
   const openEditModal = (record: MasterRecord) => {
     setEditingRecord(record);
-    setFormData({ ...record });
+    let form: Record<string, any> = { ...record };
+    if (activeSubTab === 'Item' && !record.coaId && record.coaCode) {
+      const coa = (masters['COA'] || []).find((c: any) => c.code === record.coaCode);
+      if (coa) form.coaId = coa.id;
+    }
+    setFormData(form);
     setIsModalOpen(true);
   };
 
@@ -481,7 +486,7 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
                 <option value="">Select COA Account...</option>
                 {(masters['COA'] || []).map(c => (
                   <option key={c.id} value={c.id}>
-                    {c.category}: {c.name} ({c.code})
+                    {c.category ? `${c.category}: ` : ''}{c.name} ({c.code})
                   </option>
                 ))}
               </select>
@@ -668,17 +673,18 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
                   {currentRecords.map((record) => {
                     let integrationInfo = record.code || "N/A";
                     if (activeSubTab === 'COA') {
-                      integrationInfo = `${record.category} | Code: ${record.code}`;
+                      integrationInfo = `${record.category ?? record.name ?? ''} | Code: ${record.code ?? 'N/A'}`;
                     } else if (activeSubTab === 'Vendor Site') {
                       const vendor = (masters['Vendor'] || []).find(v => v.id === record.vendorId);
                       integrationInfo = `Vendor: ${vendor ? vendor.name : 'Unknown'} | Code: ${record.code}`;
                     } else if (activeSubTab === 'Item Type') {
                       integrationInfo = record.code || record.name || '—';
                     } else if (activeSubTab === 'Item') {
-                      const coa = (masters['COA'] || []).find(c => c.id === record.coaId);
-                      const cat = (masters['Item Category'] || []).find(c => c.id === record.itemCategoryId);
-                      const uom = (masters['UOM'] || []).find(u => u.id === record.uomId);
-                      integrationInfo = `${record.itemType || 'No Type'} | ${coa ? coa.category : 'No COA'} | ${cat ? cat.name : 'No Cat'} | ${uom ? uom.name : 'No UOM'}`;
+                      const coaList = masters['COA'] || [];
+                      const coa = coaList.find((c: any) => c.id === record.coaId) ?? coaList.find((c: any) => c.code === record.coaCode);
+                      const cat = (masters['Item Category'] || []).find((c: any) => c.id === record.itemCategoryId);
+                      const uom = (masters['UOM'] || []).find((u: any) => u.id === record.uomId);
+                      integrationInfo = `${record.itemType || 'No Type'} | ${coa ? (coa.category || coa.name) : 'No COA'} | ${cat ? cat.name : 'No Cat'} | ${uom ? uom.name : 'No UOM'}`;
                     } else if (activeSubTab === 'TDS' || activeSubTab === 'GST') {
                       integrationInfo = `${record.code} | Rate: ${record.rate}%`;
                     } else if (activeSubTab === 'Department') {

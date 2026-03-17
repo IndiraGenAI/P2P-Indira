@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import jwt from 'jsonwebtoken';
-import { query, rowsToCamel, rowToCamel, objToSnake } from '../db.js';
+import pool, { query, rowsToCamel, rowToCamel, objToSnake } from '../db.js';
 import * as sessionTracker from '../sessionTracker.js';
 
 const router = Router();
@@ -610,24 +610,27 @@ router.get('/masters', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
-// POST: body = { "Vendor": [...], "Vendor Site": [...], ... }; replace all masters per type
+// POST: body = { "Vendor": [...], "Vendor Site": [...], ... }; replace all masters per type (transactional)
 router.post('/masters', async (req, res) => {
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
     const payload = req.body;
     if (payload && typeof payload === 'object') {
       for (const [masterType, records] of Object.entries(payload)) {
         if (!Array.isArray(records)) continue;
-        await query('DELETE FROM masters WHERE master_type = $1', [masterType]);
+        await client.query('DELETE FROM masters WHERE master_type = $1', [masterType]);
         for (const rec of records) {
           const { id, name, status, ...rest } = rec;
           const data = { ...rest };
-          await query(
+          await client.query(
             `INSERT INTO masters (master_type, id, name, status, data) VALUES ($1, $2, $3, $4, $5)`,
             [masterType, id || '', name, status || 'Active', JSON.stringify(data)]
           );
         }
       }
     }
+    await client.query('COMMIT');
     const res_ = await query('SELECT * FROM masters ORDER BY master_type, id');
     const byType = {};
     for (const row of res_.rows) {
@@ -638,7 +641,10 @@ router.post('/masters', async (req, res) => {
     }
     res.json(byType);
   } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
     res.status(500).json({ error: e.message });
+  } finally {
+    client.release();
   }
 });
 

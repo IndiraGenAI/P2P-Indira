@@ -8,6 +8,7 @@ import {
 } from '../types';
 import { CENTERS } from '../constants';
 import { getDepartments, getSubdepartmentsForDepartment, getItemTypesFromMasters } from '../utils/mastersHelpers';
+import { getBudgetForDocumentAndCoaCode } from '../utils/budgetHelpers';
 import MultiSelect from './MultiSelect';
 import { AlertCircle, Info, ShieldCheck, ShieldAlert } from 'lucide-react';
 
@@ -487,14 +488,15 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     const errors: string[] = [];
     po.items?.forEach(item => {
       if (!item.coaCode) return;
-      const budget = budgets.find(b => b.coaCode === item.coaCode);
+      const budget = getBudgetForDocumentAndCoaCode(budgets, item.coaCode, po) as Budget | undefined;
       if (!budget) {
         errors.push(`No budget found for GL Code ${item.coaCode}`);
         return;
       }
-      const available = budget.amount - budget.consumedAmount;
-      if ((item.totalAmount || item.amount) > available && budget.controlType === BudgetControlType.HARD_STOP) {
-        errors.push(`Budget exceeded for GL ${item.coaCode} - Available: ₹${available.toLocaleString()} | Required: ₹${(item.totalAmount || item.amount).toLocaleString()}`);
+      const available = Number(budget.amount) - Number(budget.consumedAmount);
+      const itemAmount = Number(item.totalAmount) || Number(item.amount) || 0;
+      if (itemAmount > available && budget.controlType === BudgetControlType.HARD_STOP) {
+        errors.push(`Budget exceeded for GL ${item.coaCode} - Available: ₹${available.toLocaleString()} | Required: ₹${itemAmount.toLocaleString()}`);
       }
     });
 
@@ -505,10 +507,13 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     if (po.isUnbudgeted) return;
 
     setBudgets(prev => prev.map(budget => {
+      const chosen = getBudgetForDocumentAndCoaCode(prev, budget.coaCode, po);
+      if (chosen?.id !== budget.id) return budget;
       const poItemsForGL = po.items.filter(i => i.coaCode === budget.coaCode);
       if (poItemsForGL.length > 0) {
-        const totalForGL = poItemsForGL.reduce((sum, i) => sum + (i.totalAmount || i.amount), 0);
-        return { ...budget, consumedAmount: budget.consumedAmount + totalForGL };
+        const totalForGL = poItemsForGL.reduce((sum, i) => sum + (Number(i.totalAmount) || Number(i.amount) || 0), 0);
+        const newConsumed = Math.max(0, Number(budget.consumedAmount) + totalForGL);
+        return { ...budget, consumedAmount: newConsumed };
       }
       return budget;
     }));
@@ -727,10 +732,13 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     if (po.isUnbudgeted) return;
 
     setBudgets(prev => prev.map(budget => {
+      const chosen = getBudgetForDocumentAndCoaCode(prev, budget.coaCode, po);
+      if (chosen?.id !== budget.id) return budget;
       const poItemsForGL = po.items.filter(i => i.coaCode === budget.coaCode);
       if (poItemsForGL.length > 0) {
-        const totalForGL = poItemsForGL.reduce((sum, i) => sum + (i.totalAmount || i.amount), 0);
-        return { ...budget, consumedAmount: budget.consumedAmount - totalForGL };
+        const totalForGL = poItemsForGL.reduce((sum, i) => sum + (Number(i.totalAmount) || Number(i.amount) || 0), 0);
+        const newConsumed = Math.max(0, Number(budget.consumedAmount) - totalForGL);
+        return { ...budget, consumedAmount: newConsumed };
       }
       return budget;
     }));
@@ -1862,10 +1870,11 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                         <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 space-y-1 mt-1">
                           <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Budget Check</div>
                           {po.items.map((item, idx) => {
-                            const budget = budgets.find(b => b.coaCode === item.coaCode);
+                            const budget = getBudgetForDocumentAndCoaCode(budgets, item.coaCode, po) as Budget | undefined;
                             if (!budget) return null;
-                            const balance = budget.amount - budget.consumedAmount;
-                            const isExceeded = (item.totalAmount || item.amount) > balance;
+                            const balance = Number(budget.amount) - Number(budget.consumedAmount);
+                            const itemAmount = Number(item.totalAmount) || Number(item.amount) || 0;
+                            const isExceeded = itemAmount > balance;
                             return (
                               <div key={idx} className="flex justify-between items-center text-[9px]">
                                 <span className="font-bold text-slate-600">{item.coaCode}:</span>

@@ -71,12 +71,14 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
   const approveAmendment = (amendment: BudgetAmendment) => {
     setBudgets(prev => prev.map(b => {
       if (b.id === amendment.budgetId) {
-        if (amendment.type === 'Increase') return { ...b, amount: b.amount + amendment.amount };
-        if (amendment.type === 'Decrease') return { ...b, amount: Math.max(0, b.amount - amendment.amount) };
-        if (amendment.type === 'Transfer') return { ...b, amount: b.amount - amendment.amount };
+        const amt = Number(b.amount) || 0;
+        const aAmt = Number(amendment.amount) || 0;
+        if (amendment.type === 'Increase') return { ...b, amount: amt + aAmt };
+        if (amendment.type === 'Decrease') return { ...b, amount: Math.max(0, amt - aAmt) };
+        if (amendment.type === 'Transfer') return { ...b, amount: amt - aAmt };
       }
       if (amendment.type === 'Transfer' && b.id === amendment.targetBudgetId) {
-        return { ...b, amount: b.amount + amendment.amount };
+        return { ...b, amount: (Number(b.amount) || 0) + (Number(amendment.amount) || 0) };
       }
       return b;
     }));
@@ -132,8 +134,10 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
             </thead>
             <tbody>
               {budgets.map(budget => {
-                const balance = budget.amount - budget.consumedAmount;
-                const percentConsumed = (budget.consumedAmount / budget.amount) * 100;
+                const amt = Number(budget.amount) || 0;
+                const consumed = Number(budget.consumedAmount) || 0;
+                const balance = amt - consumed;
+                const percentConsumed = amt > 0 ? (consumed / amt) * 100 : 0;
                 return (
                   <tr key={budget.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
                     <td className="p-4 font-medium text-slate-900">{budget.coaCode}</td>
@@ -148,10 +152,10 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
                     </td>
                     <td className="p-4 text-slate-600 text-sm">{budget.department ?? '—'}</td>
                     <td className="p-4 text-slate-600 text-sm">{budget.subDepartment ?? '—'}</td>
-                    <td className="p-4 font-medium">₹{budget.amount.toLocaleString()}</td>
+                    <td className="p-4 font-medium">₹{amt.toLocaleString()}</td>
                     <td className="p-4">
                       <div className="flex flex-col gap-1">
-                        <span className="text-sm">₹{budget.consumedAmount.toLocaleString()}</span>
+                        <span className="text-sm">₹{consumed.toLocaleString()}</span>
                         <div className="w-24 h-1.5 bg-slate-100 rounded-full overflow-hidden">
                           <div 
                             className={`h-full rounded-full ${percentConsumed > 90 ? 'bg-red-500' : percentConsumed > 75 ? 'bg-amber-500' : 'bg-emerald-500'}`}
@@ -262,7 +266,7 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
               </h3>
               <div className="h-80">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={budgets.map(b => ({ name: b.coaCode, budget: b.amount, actual: b.consumedAmount }))}>
+                  <BarChart data={budgets.map(b => ({ name: b.coaCode, budget: Number(b.amount) || 0, actual: Number(b.consumedAmount) || 0 }))}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                     <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 700 }} />
                     <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 10, fontWeight: 700 }} />
@@ -289,10 +293,10 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
                   <PieChart>
                     <Pie
                       data={[
-                        { name: 'OPEX Consumed', value: budgets.filter(b => b.budgetType === BudgetType.OPEX).reduce((sum, b) => sum + b.consumedAmount, 0) },
-                        { name: 'OPEX Balance', value: budgets.filter(b => b.budgetType === BudgetType.OPEX).reduce((sum, b) => sum + (b.amount - b.consumedAmount), 0) },
-                        { name: 'CAPEX Consumed', value: budgets.filter(b => b.budgetType === BudgetType.CAPEX).reduce((sum, b) => sum + b.consumedAmount, 0) },
-                        { name: 'CAPEX Balance', value: budgets.filter(b => b.budgetType === BudgetType.CAPEX).reduce((sum, b) => sum + (b.amount - b.consumedAmount), 0) },
+                        { name: 'OPEX Consumed', value: budgets.filter(b => b.budgetType === BudgetType.OPEX).reduce((sum, b) => sum + (Number(b.consumedAmount) || 0), 0) },
+                        { name: 'OPEX Balance', value: budgets.filter(b => b.budgetType === BudgetType.OPEX).reduce((sum, b) => sum + ((Number(b.amount) || 0) - (Number(b.consumedAmount) || 0)), 0) },
+                        { name: 'CAPEX Consumed', value: budgets.filter(b => b.budgetType === BudgetType.CAPEX).reduce((sum, b) => sum + (Number(b.consumedAmount) || 0), 0) },
+                        { name: 'CAPEX Balance', value: budgets.filter(b => b.budgetType === BudgetType.CAPEX).reduce((sum, b) => sum + ((Number(b.amount) || 0) - (Number(b.consumedAmount) || 0)), 0) },
                       ]}
                       cx="50%"
                       cy="50%"

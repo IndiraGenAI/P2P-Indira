@@ -8,6 +8,7 @@ import {
 } from '../types';
 import { CENTERS } from '../constants';
 import { getDepartments, getSubdepartmentsForDepartment, getItemTypesFromMasters } from '../utils/mastersHelpers';
+import { getBudgetForDocumentAndCoaCode } from '../utils/budgetHelpers';
 import MultiSelect from './MultiSelect';
 
 interface DirectInvoiceModuleProps {
@@ -77,6 +78,11 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
         items: (prev.items || []).map((item: any) => {
           if (item.id !== id) return item;
           const updated = { ...item, [field]: value };
+          if (field === 'itemName') {
+            const itemMaster = (masters.Item ?? []).find((i: any) => i.name === value);
+            const coa = (masters.COA ?? []).find((c: any) => c.id === itemMaster?.coaId);
+            updated.coaCode = (coa?.code ?? itemMaster?.coaCode ?? '') || '';
+          }
           if (field === 'itemName' || field === 'remarks' || field === 'coaCode') return updated;
           const qty = Number(updated.quantity) || 0;
           const rate = Number(updated.rate) || 0;
@@ -124,13 +130,16 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
     Papa.parse(file, {
       header: true,
       skipEmptyLines: true,
-      complete: (results) => {
+        complete: (results) => {
         const data = results.data as any[];
         const newItems: ItemLine[] = data.map((row: any) => {
           const itemName = row['Item Name'] || row['itemName'] || '';
           const qty = parseFloat(row['Qty'] || row['quantity'] || '0');
           const rate = parseFloat(row['Rate'] || row['rate'] || '0');
-          
+          const itemMaster = (masters.Item ?? []).find((i: any) => i.name === itemName);
+          const coa = (masters.COA ?? []).find((c: any) => c.id === itemMaster?.coaId);
+          const coaCode = (coa?.code ?? itemMaster?.coaCode ?? '') || '';
+
           const base = qty * rate;
           const tdsPercent = invoiceForm.tds || 0;
           const gstPercent = invoiceForm.gst || 0;
@@ -148,7 +157,8 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
             tdsAmount,
             gstAmount,
             totalAmount: base + gstAmount - tdsAmount,
-            remarks: row['Remarks'] || row['remarks'] || ''
+            remarks: row['Remarks'] || row['remarks'] || '',
+            coaCode
           };
         });
 
@@ -203,14 +213,15 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
     const errors: string[] = [];
     inv.items?.forEach((item: any) => {
       if (!item.coaCode) return;
-      const budget = budgets.find(b => b.coaCode === item.coaCode);
+      const budget = getBudgetForDocumentAndCoaCode(budgets, item.coaCode, inv);
       if (!budget) {
         errors.push(`No budget found for GL Code ${item.coaCode}`);
         return;
       }
-      const available = budget.amount - budget.consumedAmount;
-      if ((item.totalAmount || item.amount) > available && budget.controlType === BudgetControlType.HARD_STOP) {
-        errors.push(`Budget exceeded for GL ${item.coaCode} - Available: ₹${available.toLocaleString()} | Required: ₹${(item.totalAmount || item.amount).toLocaleString()}`);
+      const available = Number(budget.amount) - Number(budget.consumedAmount);
+      const itemAmount = Number(item.totalAmount) || Number(item.amount) || 0;
+      if (itemAmount > available && budget.controlType === BudgetControlType.HARD_STOP) {
+        errors.push(`Budget exceeded for GL ${item.coaCode} - Available: ₹${available.toLocaleString()} | Required: ₹${itemAmount.toLocaleString()}`);
       }
     });
 
@@ -221,10 +232,13 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
     if ((inv as any).isUnbudgeted) return;
 
     setBudgets(prev => prev.map(budget => {
+      const chosen = getBudgetForDocumentAndCoaCode(prev, budget.coaCode, inv);
+      if (chosen?.id !== budget.id) return budget;
       const invItemsForGL = inv.items?.filter(i => i.coaCode === budget.coaCode) ?? [];
       if (invItemsForGL.length > 0) {
-        const totalForGL = invItemsForGL.reduce((sum, i) => sum + (i.totalAmount || i.amount), 0);
-        return { ...budget, consumedAmount: budget.consumedAmount + totalForGL };
+        const totalForGL = invItemsForGL.reduce((sum, i) => sum + (Number(i.totalAmount) || Number(i.amount) || 0), 0);
+        const newConsumed = Math.max(0, Number(budget.consumedAmount) + totalForGL);
+        return { ...budget, consumedAmount: newConsumed };
       }
       return budget;
     }));
@@ -794,10 +808,11 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
                           <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 space-y-1 mt-1">
                             <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Budget Check</div>
                             {inv.items.map((item, idx) => {
-                              const budget = budgets.find(b => b.coaCode === item.coaCode);
+                              const budget = getBudgetForDocumentAndCoaCode(budgets, item.coaCode, inv);
                               if (!budget) return null;
-                              const balance = budget.amount - budget.consumedAmount;
-                              const isExceeded = (item.totalAmount || item.amount) > balance;
+                              const balance = Number(budget.amount) - Number(budget.consumedAmount);
+                              const itemAmount = Number(item.totalAmount) || Number(item.amount) || 0;
+                              const isExceeded = itemAmount > balance;
                               return (
                                 <div key={idx} className="flex justify-between items-center text-[9px]">
                                   <span className="font-bold text-slate-600">{item.coaCode}:</span>

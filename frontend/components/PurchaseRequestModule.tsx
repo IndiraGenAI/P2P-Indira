@@ -7,6 +7,7 @@ import {
 } from '../types';
 import { CENTERS } from '../constants';
 import { getDepartments, getSubdepartmentsForDepartment, getItemTypesFromMasters } from '../utils/mastersHelpers';
+import { getBudgetForDocumentAndCoaCode } from '../utils/budgetHelpers';
 import MultiSelect from './MultiSelect';
 import { AlertCircle, Info } from 'lucide-react';
 
@@ -100,14 +101,15 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
     const errors: string[] = [];
     pr.items?.forEach(item => {
       if (!item.coaCode) return;
-      const budget = budgets.find(b => b.coaCode === item.coaCode);
+      const budget = getBudgetForDocumentAndCoaCode(budgets, item.coaCode, pr);
       if (!budget) {
         errors.push(`No budget found for GL Code ${item.coaCode}`);
         return;
       }
-      const available = budget.amount - budget.consumedAmount;
-      if (item.amount > available && budget.controlType === BudgetControlType.HARD_STOP) {
-        errors.push(`Budget exceeded for GL ${item.coaCode} - Available: ₹${available.toLocaleString()} | Required: ₹${item.amount.toLocaleString()}`);
+      const available = Number(budget.amount) - Number(budget.consumedAmount);
+      const itemAmount = Number(item.amount) || 0;
+      if (itemAmount > available && budget.controlType === BudgetControlType.HARD_STOP) {
+        errors.push(`Budget exceeded for GL ${item.coaCode} - Available: ₹${available.toLocaleString()} | Required: ₹${itemAmount.toLocaleString()}`);
       }
     });
 
