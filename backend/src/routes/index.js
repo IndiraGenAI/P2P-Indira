@@ -18,7 +18,34 @@ const JSON_COLUMNS = {
   grns: ['items', 'attachments'],
   invoices: ['items', 'attachments'],
   direct_invoices: ['items', 'attachments'],
+  budgets: ['workflowStepHistory'],
 };
+
+function stepUserIds(step) {
+  if (!step) return [];
+  return Array.isArray(step.userIds) ? step.userIds : Array.isArray(step.user_ids) ? step.user_ids : [];
+}
+function userInApprovalChain(chain, userId) {
+  return Array.isArray(chain) && chain.some((s) => stepUserIds(s).includes(userId));
+}
+function appendMasterWorkflowHistory(data, entry) {
+  const h = Array.isArray(data.workflowStepHistory) ? [...data.workflowStepHistory] : [];
+  h.push({ ...entry, at: entry.at || new Date().toISOString() });
+  data.workflowStepHistory = h;
+}
+function parseBudgetWorkflowHistory(raw) {
+  if (raw == null) return [];
+  if (Array.isArray(raw)) return [...raw];
+  if (typeof raw === 'string') {
+    try {
+      const p = JSON.parse(raw);
+      return Array.isArray(p) ? p : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
 
 // Generic handler: GET all from table, return camelCase rows with parsed JSON columns
 async function getAll(table) {
@@ -352,6 +379,134 @@ router.get('/workflow-v2/pending', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+router.get('/workflow-v2/my-workspace', async (req, res) => {
+  try {
+    const userId = req.user?.id;
+    const scope = req.query.scope;
+    if (!userId) return res.json({ actionRequired: [], activityLog: [] });
+    if (!['Item', 'Vendor', 'Budget'].includes(String(scope || ''))) {
+      return res.status(400).json({ error: 'Query scope must be Item, Vendor, or Budget' });
+    }
+    const rulesRes = await query('SELECT * FROM workflow_v2_rules WHERE is_active = true');
+    const rules = (rulesRes.rows || []).map((r) => ({
+      id: r.id,
+      scope: r.scope,
+      masterId: r.master_id,
+      approvalChain:
+        typeof r.approval_chain === 'string' ? JSON.parse(r.approval_chain || '[]') : r.approval_chain || [],
+    }));
+    const actionRequired = [];
+    const activityLog = [];
+
+    if (scope === 'Budget') {
+      const rule = rules.find((r) => r.scope === 'Budget' && r.masterId === '__ALL__');
+      const chain = rule?.approvalChain || [];
+      const budgetsRes = await query('SELECT * FROM budgets');
+      for (const row of budgetsRes.rows || []) {
+        const wfStatus = row.workflow_status || 'Draft';
+        if (!['Pending', 'Approved', 'Rejected'].includes(wfStatus)) continue;
+        const hist = parseBudgetWorkflowHistory(row.workflow_step_history);
+        const createdBy = row.workflow_created_by;
+        const participated =
+          createdBy === userId ||
+          userInApprovalChain(chain, userId) ||
+          hist.some((e) => e && e.userId === userId);
+        if (!participated) continue;
+        const stepIndex = typeof row.workflow_current_step_index === 'number' ? row.workflow_current_step_index : 0;
+        const masterId = row.id;
+        const masterName = `${row.coa_code || ''} — ${row.entity_name || row.id}`.replace(/^ — /, '');
+        if (wfStatus === 'Pending' && rule && chain.length) {
+          const step = chain[stepIndex];
+          const uids = stepUserIds(step);
+          if (uids.includes(userId)) {
+            actionRequired.push({
+              scope: 'Budget',
+              masterId,
+              masterName,
+              currentStepIndex: stepIndex,
+              ruleId: rule.id,
+              stepType: step?.type || 'Reviewer',
+            });
+            continue;
+          }
+        }
+        let waitingNote = '';
+        if (wfStatus === 'Pending' && chain[stepIndex]) {
+          waitingNote = `Current step: ${chain[stepIndex].type || 'Reviewer'} (others)`;
+        } else if (wfStatus === 'Approved') waitingNote = 'Approved';
+        else if (wfStatus === 'Rejected') waitingNote = 'Rejected';
+        const lastAt = hist.length ? hist[hist.length - 1].at : '';
+        activityLog.push({
+          scope: 'Budget',
+          masterId,
+          masterName,
+          workflowStatus: wfStatus,
+          currentStepIndex: stepIndex,
+          waitingNote,
+          workflowStepHistory: hist,
+          sortKey: lastAt || masterId,
+        });
+      }
+    } else {
+      const rule = rules.find((r) => r.scope === scope && r.masterId === '__ALL__');
+      const chain = rule?.approvalChain || [];
+      const mastersRes = await query('SELECT * FROM masters WHERE master_type = $1', [scope]);
+      for (const row of mastersRes.rows || []) {
+        const data = row.data && typeof row.data === 'object' ? row.data : {};
+        const wfStatus = data.workflowStatus || 'Draft';
+        if (!['Pending', 'Approved', 'Rejected'].includes(wfStatus)) continue;
+        const hist = Array.isArray(data.workflowStepHistory) ? data.workflowStepHistory : [];
+        const createdBy = data.workflowCreatedBy;
+        const participated =
+          createdBy === userId ||
+          userInApprovalChain(chain, userId) ||
+          hist.some((e) => e && e.userId === userId);
+        if (!participated) continue;
+        const stepIndex = typeof data.workflowCurrentStepIndex === 'number' ? data.workflowCurrentStepIndex : 0;
+        const masterId = row.id;
+        const masterName = row.name || row.id;
+        if (wfStatus === 'Pending' && rule && chain.length) {
+          const step = chain[stepIndex];
+          const uids = stepUserIds(step);
+          if (uids.includes(userId)) {
+            actionRequired.push({
+              scope,
+              masterId,
+              masterName,
+              currentStepIndex: stepIndex,
+              ruleId: rule.id,
+              stepType: step?.type || 'Reviewer',
+            });
+            continue;
+          }
+        }
+        let waitingNote = '';
+        if (wfStatus === 'Pending' && chain[stepIndex]) {
+          waitingNote = `Current step: ${chain[stepIndex].type || 'Reviewer'} (others)`;
+        } else if (wfStatus === 'Approved') waitingNote = 'Approved';
+        else if (wfStatus === 'Rejected') waitingNote = 'Rejected';
+        const lastAt = hist.length ? hist[hist.length - 1].at : '';
+        activityLog.push({
+          scope,
+          masterId,
+          masterName,
+          workflowStatus: wfStatus,
+          currentStepIndex: stepIndex,
+          waitingNote,
+          workflowStepHistory: hist,
+          sortKey: lastAt || masterId,
+        });
+      }
+    }
+    activityLog.sort((a, b) => String(b.sortKey || '').localeCompare(String(a.sortKey || '')));
+    const trimmed = activityLog.map(({ sortKey, ...rest }) => rest);
+    res.json({ actionRequired, activityLog: trimmed });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.patch('/masters/:masterType/:id/workflow', async (req, res) => {
   try {
     const { masterType, id } = req.params;
@@ -378,8 +533,10 @@ router.patch('/masters/:masterType/:id/workflow', async (req, res) => {
       data.workflowCurrentStepIndex = workflowCurrentStepIndex;
       data.workflowRuleId = ruleRow.id;
       data.workflowCreatedBy = userId;
+      appendMasterWorkflowHistory(data, { action: 'submit', userId });
     } else if (action === 'completeReview' || action === 'approve' || action === 'reject') {
       if (workflowStatus !== 'Pending') return res.status(400).json({ error: 'Not pending' });
+      const stepIdxAtAction = workflowCurrentStepIndex;
       const step = approvalChain[workflowCurrentStepIndex];
       if (!step) return res.status(400).json({ error: 'Invalid step' });
       const userIds = Array.isArray(step.userIds) ? step.userIds : (Array.isArray(step.user_ids) ? step.user_ids : []);
@@ -401,6 +558,7 @@ router.patch('/masters/:masterType/:id/workflow', async (req, res) => {
           data.workflowCurrentStepIndex = workflowCurrentStepIndex;
         }
       }
+      appendMasterWorkflowHistory(data, { action, stepIndex: stepIdxAtAction, userId });
     } else {
       return res.status(400).json({ error: 'Invalid action' });
     }
@@ -603,6 +761,8 @@ router.patch('/budgets/:id/workflow', async (req, res) => {
     if (!budget) return res.status(404).json({ error: 'Budget not found' });
     let workflowStatus = budget.workflow_status || 'Draft';
     let workflowCurrentStepIndex = typeof budget.workflow_current_step_index === 'number' ? budget.workflow_current_step_index : 0;
+    const hist = parseBudgetWorkflowHistory(budget.workflow_step_history);
+    const now = new Date().toISOString();
     const ruleRes = await query("SELECT * FROM workflow_v2_rules WHERE scope = 'Budget' AND master_id = $1 AND is_active = true", ['__ALL__']);
     const ruleRow = ruleRes.rows[0];
     const approvalChain = ruleRow
@@ -612,40 +772,43 @@ router.patch('/budgets/:id/workflow', async (req, res) => {
       if (!ruleRow) return res.status(400).json({ error: 'No workflow rule configured for Budget' });
       workflowStatus = 'Pending';
       workflowCurrentStepIndex = 0;
+      hist.push({ action: 'submit', userId, at: now });
       await query(
-        'UPDATE budgets SET workflow_status = $1, workflow_current_step_index = $2, workflow_rule_id = $3, workflow_created_by = $4 WHERE id = $5',
-        [workflowStatus, workflowCurrentStepIndex, ruleRow.id, userId, id]
+        'UPDATE budgets SET workflow_status = $1, workflow_current_step_index = $2, workflow_rule_id = $3, workflow_created_by = $4, workflow_step_history = $5::jsonb WHERE id = $6',
+        [workflowStatus, workflowCurrentStepIndex, ruleRow.id, userId, JSON.stringify(hist), id]
       );
     } else if (action === 'completeReview' || action === 'approve' || action === 'reject') {
       if (workflowStatus !== 'Pending') return res.status(400).json({ error: 'Not pending' });
+      const stepIdxAtAction = workflowCurrentStepIndex;
       const step = approvalChain[workflowCurrentStepIndex];
       if (!step) return res.status(400).json({ error: 'Invalid step' });
       const userIds = Array.isArray(step.userIds) ? step.userIds : (Array.isArray(step.user_ids) ? step.user_ids : []);
       if (!userIds.includes(userId)) return res.status(403).json({ error: 'Not in current step' });
+      hist.push({ action, stepIndex: stepIdxAtAction, userId, at: now });
       if (action === 'reject') {
         workflowStatus = 'Rejected';
         await query(
-          'UPDATE budgets SET workflow_status = $1, workflow_rejection_remarks = $2 WHERE id = $3',
-          [workflowStatus, rejectionRemarks != null ? rejectionRemarks : budget.workflow_rejection_remarks, id]
+          'UPDATE budgets SET workflow_status = $1, workflow_rejection_remarks = $2, workflow_step_history = $3::jsonb WHERE id = $4',
+          [workflowStatus, rejectionRemarks != null ? rejectionRemarks : budget.workflow_rejection_remarks, JSON.stringify(hist), id]
         );
       } else if (step.type === 'Approver' || (approvalChain.length <= 1)) {
         workflowStatus = 'Approved';
         await query(
-          'UPDATE budgets SET workflow_status = $1, workflow_current_step_index = 0 WHERE id = $2',
-          [workflowStatus, id]
+          'UPDATE budgets SET workflow_status = $1, workflow_current_step_index = 0, workflow_step_history = $2::jsonb WHERE id = $3',
+          [workflowStatus, JSON.stringify(hist), id]
         );
       } else {
         workflowCurrentStepIndex += 1;
         if (workflowCurrentStepIndex >= approvalChain.length) {
           workflowStatus = 'Approved';
           await query(
-            'UPDATE budgets SET workflow_status = $1, workflow_current_step_index = 0 WHERE id = $2',
-            [workflowStatus, id]
+            'UPDATE budgets SET workflow_status = $1, workflow_current_step_index = 0, workflow_step_history = $2::jsonb WHERE id = $3',
+            [workflowStatus, JSON.stringify(hist), id]
           );
         } else {
           await query(
-            'UPDATE budgets SET workflow_current_step_index = $1 WHERE id = $2',
-            [workflowCurrentStepIndex, id]
+            'UPDATE budgets SET workflow_current_step_index = $1, workflow_step_history = $2::jsonb WHERE id = $3',
+            [workflowCurrentStepIndex, JSON.stringify(hist), id]
           );
         }
       }

@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { User, Budget } from '../types';
 import { apiGet, apiPatch } from '../api';
+import { ApprovalActivityLog, WorkspaceActivityItem } from './ApprovalActivityLog';
 
 interface PendingItem {
   scope: string;
@@ -9,6 +10,11 @@ interface PendingItem {
   currentStepIndex: number;
   ruleId: string;
   stepType: string;
+}
+
+interface WorkspaceResponse {
+  actionRequired: PendingItem[];
+  activityLog: WorkspaceActivityItem[];
 }
 
 interface BudgetApprovalProps {
@@ -20,27 +26,41 @@ interface BudgetApprovalProps {
   refetchMasters?: () => Promise<void>;
 }
 
-const BudgetApproval: React.FC<BudgetApprovalProps> = ({ budgets, users, currentUser, onAction, setBudgets, refetchMasters }) => {
+const BudgetApproval: React.FC<BudgetApprovalProps> = ({
+  users,
+  currentUser,
+  onAction,
+  setBudgets,
+  refetchMasters,
+}) => {
   const [pending, setPending] = useState<PendingItem[]>([]);
+  const [activityLog, setActivityLog] = useState<WorkspaceActivityItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectRemarks, setRejectRemarks] = useState('');
 
-  const fetchPending = async () => {
+  const fetchWorkspace = useCallback(async () => {
     try {
-      const res = await apiGet<PendingItem[]>('workflow-v2/pending');
-      const list = Array.isArray(res) ? res : [];
-      setPending(list.filter((p) => p.scope === 'Budget'));
+      const res = await apiGet<WorkspaceResponse>('workflow-v2/my-workspace?scope=Budget');
+      if (res && typeof res === 'object' && Array.isArray(res.actionRequired)) {
+        setPending(res.actionRequired);
+        setActivityLog(Array.isArray(res.activityLog) ? res.activityLog : []);
+      } else {
+        setPending([]);
+        setActivityLog([]);
+      }
     } catch {
       setPending([]);
+      setActivityLog([]);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchPending();
-  }, [currentUser?.id]);
+    setLoading(true);
+    fetchWorkspace();
+  }, [currentUser?.id, fetchWorkspace]);
 
   const handleAction = async (
     budgetId: string,
@@ -53,7 +73,7 @@ const BudgetApproval: React.FC<BudgetApprovalProps> = ({ budgets, users, current
         rejectionRemarks: rejectionRemarks || undefined,
       });
       setBudgets((prev) => prev.map((b) => (b.id === budgetId ? { ...b, ...updated } : b)));
-      await fetchPending();
+      await fetchWorkspace();
       await refetchMasters?.();
       onAction();
     } catch (e) {
@@ -78,13 +98,13 @@ const BudgetApproval: React.FC<BudgetApprovalProps> = ({ budgets, users, current
       <div className="p-8 border-b border-slate-200 bg-slate-50/50">
         <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight">Budget Approval</h2>
         <p className="text-sm text-slate-500 mt-1">
-          Budgets pending your review or approval.
+          <span className="font-semibold text-slate-700">Needs your action</span> — complete review, approve, or reject.
         </p>
       </div>
       <div className="p-6">
         {pending.length === 0 ? (
-          <div className="text-center py-16 text-slate-500 font-bold">
-            No pending Budget approvals for you.
+          <div className="text-center py-8 text-slate-500 font-bold">
+            Nothing waiting on you right now.
           </div>
         ) : (
           <div className="space-y-4">
@@ -139,7 +159,10 @@ const BudgetApproval: React.FC<BudgetApprovalProps> = ({ budgets, users, current
                         Confirm Reject
                       </button>
                       <button
-                        onClick={() => { setRejectingId(null); setRejectRemarks(''); }}
+                        onClick={() => {
+                          setRejectingId(null);
+                          setRejectRemarks('');
+                        }}
                         className="px-4 py-2 bg-slate-100 text-slate-600 text-xs font-bold rounded-lg"
                       >
                         Cancel
@@ -151,6 +174,7 @@ const BudgetApproval: React.FC<BudgetApprovalProps> = ({ budgets, users, current
             ))}
           </div>
         )}
+        <ApprovalActivityLog items={activityLog} users={users} title="Budget activity & waiting list" />
       </div>
     </div>
   );

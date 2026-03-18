@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { User, MasterRecord } from '../types';
 import { apiGet, apiPatch } from '../api';
+import { ApprovalActivityLog, WorkspaceActivityItem } from './ApprovalActivityLog';
 
 interface PendingItem {
   scope: string;
@@ -11,6 +12,11 @@ interface PendingItem {
   stepType: string;
 }
 
+interface WorkspaceResponse {
+  actionRequired: PendingItem[];
+  activityLog: WorkspaceActivityItem[];
+}
+
 interface VendorApprovalProps {
   masters: Record<string, MasterRecord[]>;
   users: User[];
@@ -19,27 +25,35 @@ interface VendorApprovalProps {
   refetchMasters?: () => Promise<void>;
 }
 
-const VendorApproval: React.FC<VendorApprovalProps> = ({ masters, users, currentUser, onAction, refetchMasters }) => {
+const VendorApproval: React.FC<VendorApprovalProps> = ({ users, currentUser, onAction, refetchMasters }) => {
   const [pending, setPending] = useState<PendingItem[]>([]);
+  const [activityLog, setActivityLog] = useState<WorkspaceActivityItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectRemarks, setRejectRemarks] = useState('');
 
-  const fetchPending = async () => {
+  const fetchWorkspace = useCallback(async () => {
     try {
-      const res = await apiGet<PendingItem[]>('workflow-v2/pending');
-      const list = Array.isArray(res) ? res : [];
-      setPending(list.filter((p) => p.scope === 'Vendor'));
+      const res = await apiGet<WorkspaceResponse>('workflow-v2/my-workspace?scope=Vendor');
+      if (res && typeof res === 'object' && Array.isArray(res.actionRequired)) {
+        setPending(res.actionRequired);
+        setActivityLog(Array.isArray(res.activityLog) ? res.activityLog : []);
+      } else {
+        setPending([]);
+        setActivityLog([]);
+      }
     } catch {
       setPending([]);
+      setActivityLog([]);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchPending();
-  }, [currentUser?.id]);
+    setLoading(true);
+    fetchWorkspace();
+  }, [currentUser?.id, fetchWorkspace]);
 
   const handleAction = async (
     masterId: string,
@@ -51,7 +65,7 @@ const VendorApproval: React.FC<VendorApprovalProps> = ({ masters, users, current
         action,
         rejectionRemarks: rejectionRemarks || undefined,
       });
-      await fetchPending();
+      await fetchWorkspace();
       await refetchMasters?.();
       onAction();
     } catch (e) {
@@ -76,13 +90,13 @@ const VendorApproval: React.FC<VendorApprovalProps> = ({ masters, users, current
       <div className="p-8 border-b border-slate-200 bg-slate-50/50">
         <h2 className="text-xl font-black text-slate-800 uppercase tracking-tight">Vendor Approval</h2>
         <p className="text-sm text-slate-500 mt-1">
-          Vendors pending your review or approval.
+          <span className="font-semibold text-slate-700">Needs your action</span> — complete review, approve, or reject.
         </p>
       </div>
       <div className="p-6">
         {pending.length === 0 ? (
-          <div className="text-center py-16 text-slate-500 font-bold">
-            No pending Vendor approvals for you.
+          <div className="text-center py-8 text-slate-500 font-bold">
+            Nothing waiting on you right now.
           </div>
         ) : (
           <div className="space-y-4">
@@ -137,7 +151,10 @@ const VendorApproval: React.FC<VendorApprovalProps> = ({ masters, users, current
                         Confirm Reject
                       </button>
                       <button
-                        onClick={() => { setRejectingId(null); setRejectRemarks(''); }}
+                        onClick={() => {
+                          setRejectingId(null);
+                          setRejectRemarks('');
+                        }}
                         className="px-4 py-2 bg-slate-100 text-slate-600 text-xs font-bold rounded-lg"
                       >
                         Cancel
@@ -149,6 +166,7 @@ const VendorApproval: React.FC<VendorApprovalProps> = ({ masters, users, current
             ))}
           </div>
         )}
+        <ApprovalActivityLog items={activityLog} users={users} />
       </div>
     </div>
   );

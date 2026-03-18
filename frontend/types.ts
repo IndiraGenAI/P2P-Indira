@@ -95,6 +95,8 @@ export interface Budget {
   workflowRuleId?: string;
   workflowCreatedBy?: string;
   workflowRejectionRemarks?: string;
+  /** Server-written audit: submit / completeReview / approve / reject */
+  workflowStepHistory?: { action: string; userId?: string; at?: string; stepIndex?: number }[];
 }
 
 export interface BudgetAmendment {
