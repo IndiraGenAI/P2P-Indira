@@ -301,6 +301,7 @@ router.get('/workflow-v2/pending', async (req, res) => {
     if (!userId) return res.json([]);
     const rulesRes = await query('SELECT * FROM workflow_v2_rules WHERE is_active = true');
     const mastersRes = await query("SELECT * FROM masters WHERE master_type IN ('Item', 'Vendor')");
+    const budgetsRes = await query('SELECT * FROM budgets');
     const rules = (rulesRes.rows || []).map((r) => ({
       id: r.id,
       scope: r.scope,
@@ -312,7 +313,7 @@ router.get('/workflow-v2/pending', async (req, res) => {
       const data = row.data && typeof row.data === 'object' ? row.data : {};
       if (data.workflowStatus !== 'Pending') continue;
       const stepIndex = typeof data.workflowCurrentStepIndex === 'number' ? data.workflowCurrentStepIndex : 0;
-      const rule = rules.find((r) => r.scope === row.master_type && r.masterId === row.id);
+      const rule = rules.find((r) => r.scope === row.master_type && r.masterId === '__ALL__');
       if (!rule || !rule.approvalChain.length) continue;
       const step = rule.approvalChain[stepIndex];
       if (!step) continue;
@@ -322,6 +323,25 @@ router.get('/workflow-v2/pending', async (req, res) => {
         scope: row.master_type,
         masterId: row.id,
         masterName: row.name,
+        currentStepIndex: stepIndex,
+        ruleId: rule.id,
+        stepType: step.type || 'Reviewer',
+      });
+    }
+    for (const row of budgetsRes.rows || []) {
+      const wfStatus = row.workflow_status || 'Draft';
+      if (wfStatus !== 'Pending') continue;
+      const stepIndex = typeof row.workflow_current_step_index === 'number' ? row.workflow_current_step_index : 0;
+      const rule = rules.find((r) => r.scope === 'Budget' && r.masterId === '__ALL__');
+      if (!rule || !rule.approvalChain.length) continue;
+      const step = rule.approvalChain[stepIndex];
+      if (!step) continue;
+      const userIds = Array.isArray(step.userIds) ? step.userIds : (Array.isArray(step.user_ids) ? step.user_ids : []);
+      if (!userIds.includes(userId)) continue;
+      pending.push({
+        scope: 'Budget',
+        masterId: row.id,
+        masterName: `${row.coa_code} - ${row.entity_name || row.id}`,
         currentStepIndex: stepIndex,
         ruleId: rule.id,
         stepType: step.type || 'Reviewer',
@@ -345,7 +365,7 @@ router.patch('/masters/:masterType/:id/workflow', async (req, res) => {
     const data = master.data && typeof master.data === 'object' ? { ...master.data } : {};
     let workflowStatus = data.workflowStatus || 'Draft';
     let workflowCurrentStepIndex = typeof data.workflowCurrentStepIndex === 'number' ? data.workflowCurrentStepIndex : 0;
-    const ruleRes = await query('SELECT * FROM workflow_v2_rules WHERE scope = $1 AND master_id = $2 AND is_active = true', [masterType, id]);
+    const ruleRes = await query('SELECT * FROM workflow_v2_rules WHERE scope = $1 AND master_id = $2 AND is_active = true', [masterType, '__ALL__']);
     const ruleRow = ruleRes.rows[0];
     const approvalChain = ruleRow
       ? (typeof ruleRow.approval_chain === 'string' ? JSON.parse(ruleRow.approval_chain || '[]') : ruleRow.approval_chain || [])
@@ -554,7 +574,7 @@ router.post('/direct-invoices', async (req, res) => {
 });
 
 // --- BUDGETS ---
-const BUDGET_COLS = ['id', 'financial_year', 'entity_name', 'location_name', 'cost_center_name', 'coa_code', 'department', 'sub_department', 'budget_type', 'amount', 'consumed_amount', 'control_type', 'validity', 'is_active'];
+const BUDGET_COLS = ['id', 'financial_year', 'entity_name', 'location_name', 'cost_center_name', 'coa_code', 'department', 'sub_department', 'budget_type', 'amount', 'consumed_amount', 'control_type', 'validity', 'is_active', 'workflow_status', 'workflow_current_step_index', 'workflow_rule_id', 'workflow_created_by', 'workflow_rejection_remarks'];
 router.get('/budgets', async (req, res) => {
   try {
     const rows = await getAll('budgets');
@@ -568,6 +588,73 @@ router.post('/budgets', async (req, res) => {
     await buildUpsert('budgets', 'id', BUDGET_COLS, req.body);
     const rows = await getAll('budgets');
     res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+router.patch('/budgets/:id/workflow', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.id;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized' });
+    const { action, rejectionRemarks } = req.body || {};
+    const budgetRes = await query('SELECT * FROM budgets WHERE id = $1', [id]);
+    const budget = budgetRes.rows[0];
+    if (!budget) return res.status(404).json({ error: 'Budget not found' });
+    let workflowStatus = budget.workflow_status || 'Draft';
+    let workflowCurrentStepIndex = typeof budget.workflow_current_step_index === 'number' ? budget.workflow_current_step_index : 0;
+    const ruleRes = await query("SELECT * FROM workflow_v2_rules WHERE scope = 'Budget' AND master_id = $1 AND is_active = true", ['__ALL__']);
+    const ruleRow = ruleRes.rows[0];
+    const approvalChain = ruleRow
+      ? (typeof ruleRow.approval_chain === 'string' ? JSON.parse(ruleRow.approval_chain || '[]') : ruleRow.approval_chain || [])
+      : [];
+    if (action === 'submit') {
+      if (!ruleRow) return res.status(400).json({ error: 'No workflow rule configured for Budget' });
+      workflowStatus = 'Pending';
+      workflowCurrentStepIndex = 0;
+      await query(
+        'UPDATE budgets SET workflow_status = $1, workflow_current_step_index = $2, workflow_rule_id = $3, workflow_created_by = $4 WHERE id = $5',
+        [workflowStatus, workflowCurrentStepIndex, ruleRow.id, userId, id]
+      );
+    } else if (action === 'completeReview' || action === 'approve' || action === 'reject') {
+      if (workflowStatus !== 'Pending') return res.status(400).json({ error: 'Not pending' });
+      const step = approvalChain[workflowCurrentStepIndex];
+      if (!step) return res.status(400).json({ error: 'Invalid step' });
+      const userIds = Array.isArray(step.userIds) ? step.userIds : (Array.isArray(step.user_ids) ? step.user_ids : []);
+      if (!userIds.includes(userId)) return res.status(403).json({ error: 'Not in current step' });
+      if (action === 'reject') {
+        workflowStatus = 'Rejected';
+        await query(
+          'UPDATE budgets SET workflow_status = $1, workflow_rejection_remarks = $2 WHERE id = $3',
+          [workflowStatus, rejectionRemarks != null ? rejectionRemarks : budget.workflow_rejection_remarks, id]
+        );
+      } else if (step.type === 'Approver' || (approvalChain.length <= 1)) {
+        workflowStatus = 'Approved';
+        await query(
+          'UPDATE budgets SET workflow_status = $1, workflow_current_step_index = 0 WHERE id = $2',
+          [workflowStatus, id]
+        );
+      } else {
+        workflowCurrentStepIndex += 1;
+        if (workflowCurrentStepIndex >= approvalChain.length) {
+          workflowStatus = 'Approved';
+          await query(
+            'UPDATE budgets SET workflow_status = $1, workflow_current_step_index = 0 WHERE id = $2',
+            [workflowStatus, id]
+          );
+        } else {
+          await query(
+            'UPDATE budgets SET workflow_current_step_index = $1 WHERE id = $2',
+            [workflowCurrentStepIndex, id]
+          );
+        }
+      }
+    } else {
+      return res.status(400).json({ error: 'Invalid action' });
+    }
+    const updated = await query('SELECT * FROM budgets WHERE id = $1', [id]);
+    const row = updated.rows[0];
+    res.json(rowToCamel(row));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -611,6 +698,7 @@ router.get('/masters', async (req, res) => {
   }
 });
 // POST: body = { "Vendor": [...], "Vendor Site": [...], ... }; replace all masters per type (transactional)
+// Skip records with falsy id, deduplicate by id per type, use upsert to avoid duplicate key errors
 router.post('/masters', async (req, res) => {
   const client = await pool.connect();
   try {
@@ -619,13 +707,22 @@ router.post('/masters', async (req, res) => {
     if (payload && typeof payload === 'object') {
       for (const [masterType, records] of Object.entries(payload)) {
         if (!Array.isArray(records)) continue;
-        await client.query('DELETE FROM masters WHERE master_type = $1', [masterType]);
+        // Skip records without a valid id; deduplicate by id (keep last)
+        const seen = new Map();
         for (const rec of records) {
+          const id = rec.id != null && String(rec.id).trim() !== '' ? String(rec.id).trim() : null;
+          if (!id) continue;
+          seen.set(id, rec);
+        }
+        const deduped = Array.from(seen.values());
+        await client.query('DELETE FROM masters WHERE master_type = $1', [masterType]);
+        for (const rec of deduped) {
           const { id, name, status, ...rest } = rec;
           const data = { ...rest };
           await client.query(
-            `INSERT INTO masters (master_type, id, name, status, data) VALUES ($1, $2, $3, $4, $5)`,
-            [masterType, id || '', name, status || 'Active', JSON.stringify(data)]
+            `INSERT INTO masters (master_type, id, name, status, data) VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (master_type, id) DO UPDATE SET name = EXCLUDED.name, status = EXCLUDED.status, data = EXCLUDED.data`,
+            [masterType, id, name, status || 'Active', JSON.stringify(data)]
           );
         }
       }

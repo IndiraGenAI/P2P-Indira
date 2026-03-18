@@ -4,11 +4,12 @@ import Papa from 'papaparse';
 import { 
   Invoice, MasterRecord, MasterType, 
   Frequency, Attachment, ItemLine,
-  User, WorkflowRule, Budget, BudgetControlType, ModuleType, ApprovalType
+  User, WorkflowRule, Budget, BudgetControlType, ModuleType, ApprovalType, WorkflowV2Rule
 } from '../types';
 import { CENTERS } from '../constants';
 import { getDepartments, getSubdepartmentsForDepartment, getItemTypesFromMasters } from '../utils/mastersHelpers';
 import { getBudgetForDocumentAndCoaCode } from '../utils/budgetHelpers';
+import { filterByWorkflowApproval } from '../utils/workflowV2Filters';
 import MultiSelect from './MultiSelect';
 
 interface DirectInvoiceModuleProps {
@@ -19,9 +20,13 @@ interface DirectInvoiceModuleProps {
   setBudgets: React.Dispatch<React.SetStateAction<Budget[]>>;
   directInvoices: Invoice[];
   setDirectInvoices: React.Dispatch<React.SetStateAction<Invoice[]>>;
+  workflowV2Rules?: WorkflowV2Rule[];
 }
 
-const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, currentUser, workflows, budgets, setBudgets, directInvoices, setDirectInvoices }) => {
+const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, currentUser, workflows, budgets, setBudgets, directInvoices, setDirectInvoices, workflowV2Rules = [] }) => {
+  const vendorsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Vendor', masters.Vendor ?? []) as MasterRecord[];
+  const itemsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Item', masters.Item ?? []) as MasterRecord[];
+  const budgetsForDeduction = filterByWorkflowApproval(workflowV2Rules, 'Budget', budgets);
   const [showForm, setShowForm] = useState(false);
   
   // Form states
@@ -213,7 +218,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
     const errors: string[] = [];
     inv.items?.forEach((item: any) => {
       if (!item.coaCode) return;
-      const budget = getBudgetForDocumentAndCoaCode(budgets, item.coaCode, inv);
+      const budget = getBudgetForDocumentAndCoaCode(budgetsForDeduction, item.coaCode, inv);
       if (!budget) {
         errors.push(`No budget found for GL Code ${item.coaCode}`);
         return;
@@ -415,7 +420,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
                 onChange={e => setInvoiceForm({ ...invoiceForm, vendorId: e.target.value, vendorSiteId: '' })}
               >
                 <option value="">Select Vendor</option>
-                {(masters.Vendor ?? []).map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+                {vendorsForDropdown.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
               </select>
             </div>
             <div className="space-y-2">
@@ -576,7 +581,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
                           onChange={e => updateItem(item.id, 'itemName', e.target.value)}
                         >
                           <option value="">Select Item</option>
-                          {(masters.Item ?? []).filter((i: any) => !invoiceForm.items?.some((selected: any) => selected.id !== item.id && selected.itemName === i.name)).map((i: any) => <option key={i.id} value={i.name}>{i.name}</option>)}
+                          {itemsForDropdown.filter((i: any) => !invoiceForm.items?.some((selected: any) => selected.id !== item.id && selected.itemName === i.name)).map((i: any) => <option key={i.id} value={i.name}>{i.name}</option>)}
                         </select>
                       </div>
                       <div className="col-span-1 space-y-1">
@@ -808,7 +813,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
                           <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 space-y-1 mt-1">
                             <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Budget Check</div>
                             {inv.items.map((item, idx) => {
-                              const budget = getBudgetForDocumentAndCoaCode(budgets, item.coaCode, inv);
+                              const budget = getBudgetForDocumentAndCoaCode(budgetsForDeduction, item.coaCode, inv);
                               if (!budget) return null;
                               const balance = Number(budget.amount) - Number(budget.consumedAmount);
                               const itemAmount = Number(item.totalAmount) || Number(item.amount) || 0;

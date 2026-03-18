@@ -9,7 +9,11 @@ export enum ModuleType {
   INVOICE_GRN = 'Invoice against GRN',
   DIRECT_INVOICE = 'Direct Invoice',
   BUDGET = 'Budget',
-  MASTERS = 'Masters Control'
+  MASTERS = 'Masters Control',
+  WORKFLOW_V2 = 'Workflow (V2)',
+  ITEM_APPROVAL = 'Item Approval',
+  VENDOR_APPROVAL = 'Vendor Approval',
+  BUDGET_APPROVAL = 'Budget Approval',
 }
 
 export type Permission = 'create' | 'edit' | 'view' | 'delete';
@@ -46,7 +50,7 @@ export interface MasterRecord {
   [key: string]: any;
 }
 
-export type NavigationTab = 'dashboard' | 'users' | 'roles' | 'workflows' | 'workflow_v2' | 'item_vendor_approval' | 'masters' | 'purchase_request' | 'rate_contract' | 'purchase_order' | 'direct_invoice' | 'budgets';
+export type NavigationTab = 'dashboard' | 'users' | 'roles' | 'workflows' | 'workflow_v2' | 'item_approval' | 'vendor_approval' | 'budget_approval' | 'masters' | 'purchase_request' | 'rate_contract' | 'purchase_order' | 'direct_invoice' | 'budgets';
 
 export type MasterType = 
   | 'Vendor' | 'Vendor Site' | 'Item' | 'Item Type' | 'Department' | 'Subdepartment' 
@@ -86,6 +90,11 @@ export interface Budget {
   controlType: BudgetControlType;
   validity: BudgetValidity;
   isActive: boolean;
+  workflowStatus?: 'Draft' | 'Pending' | 'Approved' | 'Rejected';
+  workflowCurrentStepIndex?: number;
+  workflowRuleId?: string;
+  workflowCreatedBy?: string;
+  workflowRejectionRemarks?: string;
 }
 
 export interface BudgetAmendment {
@@ -306,7 +315,7 @@ export interface WorkflowRule {
 /** Item/Vendor creation approval rules (independent of PO/RC/GRN/Invoice workflows). */
 export interface WorkflowV2Rule {
   id: string;
-  scope: 'Item' | 'Vendor';
+  scope: 'Item' | 'Vendor' | 'Budget';
   masterId: string;
   approvalChain: ApprovalStep[];
   isActive: boolean;

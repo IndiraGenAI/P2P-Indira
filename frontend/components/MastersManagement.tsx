@@ -1,6 +1,9 @@
 
 import React, { useState, useEffect } from 'react';
 import { MasterRecord, MasterType, WorkflowV2Rule } from '../types';
+
+/** Seconds after Deploy before Submit for approval appears (covers POST /masters latency). */
+const SUBMIT_APPROVAL_DELAY_SEC = 3;
 import { COA_CATEGORIES, GST_TYPES, TRANSACTION_TYPES, CENTERS, ENTITIES, MASTER_GROUPS } from '../constants';
 import { getAllSubdepartments } from '../utils/mastersHelpers';
 import MultiSelect from './MultiSelect';
@@ -24,6 +27,13 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
   const [editingRecord, setEditingRecord] = useState<MasterRecord | null>(null);
   
   const [formData, setFormData] = useState<Record<string, any>>({});
+  const [submitCooldownUntil, setSubmitCooldownUntil] = useState<Record<string, number>>({});
+  const [nowTick, setNowTick] = useState(() => Date.now());
+
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   const filteredGroups =
     allowedMasterTypes === null || !Array.isArray(allowedMasterTypes)
@@ -85,6 +95,13 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
         ...finalData
       } as MasterRecord;
       updated = [...currentRecords, newRecord];
+      if (activeSubTab === 'Item' || activeSubTab === 'Vendor') {
+        const key = `${activeSubTab}:${newRecord.id}`;
+        setSubmitCooldownUntil((prev) => ({
+          ...prev,
+          [key]: Date.now() + SUBMIT_APPROVAL_DELAY_SEC * 1000,
+        }));
+      }
     }
     onUpdate(activeSubTab, updated);
     setIsModalOpen(false);
@@ -729,25 +746,35 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
                               {(record as any).workflowStatus || 'Draft'}
                             </span>
                             {((record as any).workflowStatus === 'Draft' || !(record as any).workflowStatus) &&
-                             workflowV2Rules.some((r) => r.scope === activeSubTab && r.masterId === record.id) &&
+                             workflowV2Rules.some((r) => r.scope === activeSubTab && r.masterId === '__ALL__' && r.isActive) &&
                              refetchMasters &&
-                             onRefreshPendingItemVendor && (
-                              <button
-                                type="button"
-                                onClick={async () => {
-                                  try {
-                                    await apiPatch(`masters/${activeSubTab}/${record.id}/workflow`, { action: 'submit' });
-                                    await refetchMasters();
-                                    onRefreshPendingItemVendor();
-                                  } catch (e) {
-                                    alert((e as Error).message || 'Submit failed');
-                                  }
-                                }}
-                                className="ml-2 px-3 py-1 bg-indigo-600 text-white text-[9px] font-black uppercase rounded-lg hover:bg-indigo-700"
-                              >
-                                Submit for approval
-                              </button>
-                            )}
+                             onRefreshPendingItemVendor && (() => {
+                              const cdKey = `${activeSubTab}:${record.id}`;
+                              const until = submitCooldownUntil[cdKey];
+                              const secsLeft = until ? Math.max(0, Math.ceil((until - nowTick) / 1000)) : 0;
+                              const inCooldown = until != null && nowTick < until;
+                              return inCooldown ? (
+                                <span className="ml-2 inline-block px-3 py-1 bg-slate-200 text-slate-600 text-[9px] font-black uppercase rounded-lg tabular-nums">
+                                  Submit in {secsLeft}s
+                                </span>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    try {
+                                      await apiPatch(`masters/${activeSubTab}/${record.id}/workflow`, { action: 'submit' });
+                                      await refetchMasters();
+                                      onRefreshPendingItemVendor();
+                                    } catch (e) {
+                                      alert((e as Error).message || 'Submit failed');
+                                    }
+                                  }}
+                                  className="ml-2 px-3 py-1 bg-indigo-600 text-white text-[9px] font-black uppercase rounded-lg hover:bg-indigo-700"
+                                >
+                                  Submit for approval
+                                </button>
+                              );
+                            })()}
                           </td>
                         )}
                         <td className="px-6 py-5 text-right">

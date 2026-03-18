@@ -1,7 +1,8 @@
 
 import React, { useState } from 'react';
-import { Budget, BudgetAmendment, BudgetType, BudgetControlType, BudgetValidity, MasterRecord, MasterType, User, PurchaseOrder, PurchaseRequest } from '../types';
+import { Budget, BudgetAmendment, BudgetType, BudgetControlType, BudgetValidity, MasterRecord, MasterType, User, PurchaseOrder, PurchaseRequest, WorkflowV2Rule } from '../types';
 import { getDepartments, getSubdepartmentsForDepartment } from '../utils/mastersHelpers';
+import { apiPatch } from '../api';
 import { Plus, Edit2, History, CheckCircle, XCircle, ArrowRightLeft, TrendingUp, TrendingDown, AlertCircle, BarChart3, PieChart as PieChartIcon, FileText } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
@@ -14,9 +15,12 @@ interface BudgetModuleProps {
   currentUser: User;
   purchaseOrders: PurchaseOrder[];
   purchaseRequests: PurchaseRequest[];
+  workflowV2Rules?: WorkflowV2Rule[];
+  onRefreshPendingCounts?: () => void;
 }
 
-const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendments, setAmendments, masters, currentUser, purchaseOrders, purchaseRequests }) => {
+const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendments, setAmendments, masters, currentUser, purchaseOrders, purchaseRequests, workflowV2Rules = [], onRefreshPendingCounts }) => {
+  const budgetWorkflowExists = workflowV2Rules.some((r) => r.scope === 'Budget' && r.masterId === '__ALL__' && r.isActive);
   const [view, setView] = useState<'list' | 'amendments' | 'reports'>('list');
   const [showAddModal, setShowAddModal] = useState(false);
   const [showAmendModal, setShowAmendModal] = useState(false);
@@ -129,6 +133,7 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
                 <th className="p-4 font-semibold text-slate-700">Consumed</th>
                 <th className="p-4 font-semibold text-slate-700">Balance</th>
                 <th className="p-4 font-semibold text-slate-700">Control</th>
+                {budgetWorkflowExists && <th className="p-4 font-semibold text-slate-700">Status</th>}
                 <th className="p-4 font-semibold text-slate-700 text-right">Actions</th>
               </tr>
             </thead>
@@ -172,6 +177,35 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
                         {budget.controlType}
                       </span>
                     </td>
+                    {budgetWorkflowExists && (
+                      <td className="p-4">
+                        <span className={`text-[9px] font-black uppercase px-2 py-1 rounded-lg ${
+                          budget.workflowStatus === 'Approved' ? 'bg-emerald-100 text-emerald-700' :
+                          budget.workflowStatus === 'Rejected' ? 'bg-rose-100 text-rose-600' :
+                          budget.workflowStatus === 'Pending' ? 'bg-amber-100 text-amber-700' :
+                          'bg-slate-100 text-slate-500'
+                        }`}>
+                          {budget.workflowStatus || 'Draft'}
+                        </span>
+                        {((budget.workflowStatus === 'Draft' || !budget.workflowStatus) && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                const updated = await apiPatch<Budget>(`budgets/${budget.id}/workflow`, { action: 'submit' });
+                                setBudgets((prev) => prev.map((b) => (b.id === budget.id ? { ...b, ...updated } : b)));
+                                onRefreshPendingCounts?.();
+                              } catch (e) {
+                                alert((e as Error).message || 'Submit failed');
+                              }
+                            }}
+                            className="ml-2 px-3 py-1 bg-indigo-600 text-white text-[9px] font-black uppercase rounded-lg hover:bg-indigo-700"
+                          >
+                            Submit for approval
+                          </button>
+                        ))}
+                      </td>
+                    )}
                     <td className="p-4 text-right">
                       <button 
                         onClick={() => { setSelectedBudget(budget); setShowAmendModal(true); }}

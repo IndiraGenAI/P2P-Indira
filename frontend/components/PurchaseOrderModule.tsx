@@ -4,11 +4,12 @@ import Papa from 'papaparse';
 import { 
   PurchaseOrder, GRN, Invoice, MasterRecord, MasterType, 
   Frequency, Attachment, ItemLine, PurchaseRequest,
-  User, WorkflowRule, Budget, BudgetType, BudgetControlType, ModuleType, ApprovalType
+  User, WorkflowRule, Budget, BudgetType, BudgetControlType, ModuleType, ApprovalType, WorkflowV2Rule
 } from '../types';
 import { CENTERS } from '../constants';
 import { getDepartments, getSubdepartmentsForDepartment, getItemTypesFromMasters } from '../utils/mastersHelpers';
 import { getBudgetForDocumentAndCoaCode } from '../utils/budgetHelpers';
+import { filterByWorkflowApproval } from '../utils/workflowV2Filters';
 import MultiSelect from './MultiSelect';
 import { AlertCircle, Info, ShieldCheck, ShieldAlert } from 'lucide-react';
 
@@ -26,13 +27,17 @@ interface PurchaseOrderModuleProps {
   workflows: WorkflowRule[];
   budgets: Budget[];
   setBudgets: React.Dispatch<React.SetStateAction<Budget[]>>;
+  workflowV2Rules?: WorkflowV2Rule[];
 }
 
 type ViewMode = 'PO' | 'GRN' | 'Invoice';
 
 const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({ 
-  masters, purchaseOrders, setPurchaseOrders, grns, setGrns, invoices, setInvoices, pendingPR, onPOCreated, currentUser, workflows, budgets, setBudgets
+  masters, purchaseOrders, setPurchaseOrders, grns, setGrns, invoices, setInvoices, pendingPR, onPOCreated, currentUser, workflows, budgets, setBudgets, workflowV2Rules = []
 }) => {
+  const vendorsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Vendor', masters.Vendor ?? []) as MasterRecord[];
+  const itemsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Item', masters.Item ?? []) as MasterRecord[];
+  const budgetsForDeduction = filterByWorkflowApproval(workflowV2Rules, 'Budget', budgets);
   const [viewMode, setViewMode] = useState<ViewMode>('PO');
   
   const [showForm, setShowForm] = useState(false);
@@ -488,7 +493,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     const errors: string[] = [];
     po.items?.forEach(item => {
       if (!item.coaCode) return;
-      const budget = getBudgetForDocumentAndCoaCode(budgets, item.coaCode, po) as Budget | undefined;
+      const budget = getBudgetForDocumentAndCoaCode(budgetsForDeduction, item.coaCode, po) as Budget | undefined;
       if (!budget) {
         errors.push(`No budget found for GL Code ${item.coaCode}`);
         return;
@@ -868,7 +873,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                     onChange={e => setPoForm({ ...poForm, vendorId: e.target.value, vendorSiteId: '' })}
                   >
                     <option value="">Select Vendor</option>
-                    {(masters.Vendor ?? []).map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+                    {vendorsForDropdown.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
                   </select>
                 </div>
                 <div className="space-y-2">
@@ -1127,7 +1132,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                               onChange={e => updateItem(item.id, 'itemName', e.target.value)}
                             >
                               <option value="">Select Item</option>
-                              {(masters.Item ?? []).filter(i => !poForm.items?.some(selected => selected.id !== item.id && selected.itemName === i.name)).map(i => <option key={i.id} value={i.name}>{i.name}</option>)}
+                              {itemsForDropdown.filter(i => !poForm.items?.some(selected => selected.id !== item.id && selected.itemName === i.name)).map(i => <option key={i.id} value={i.name}>{i.name}</option>)}
                             </select>
                           </div>
                           <div className="col-span-1 space-y-1">
@@ -1870,7 +1875,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                         <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 space-y-1 mt-1">
                           <div className="text-[8px] font-black text-slate-400 uppercase tracking-widest">Budget Check</div>
                           {po.items.map((item, idx) => {
-                            const budget = getBudgetForDocumentAndCoaCode(budgets, item.coaCode, po) as Budget | undefined;
+                            const budget = getBudgetForDocumentAndCoaCode(budgetsForDeduction, item.coaCode, po) as Budget | undefined;
                             if (!budget) return null;
                             const balance = Number(budget.amount) - Number(budget.consumedAmount);
                             const itemAmount = Number(item.totalAmount) || Number(item.amount) || 0;

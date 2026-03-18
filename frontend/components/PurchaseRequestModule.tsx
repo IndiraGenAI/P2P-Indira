@@ -3,11 +3,12 @@ import React, { useState } from 'react';
 import { 
   PurchaseRequest, MasterRecord, MasterType, 
   Attachment, ItemLine, Frequency,
-  User, WorkflowRule, Budget, BudgetType, BudgetControlType, ModuleType, ApprovalType
+  User, WorkflowRule, Budget, BudgetType, BudgetControlType, ModuleType, ApprovalType, WorkflowV2Rule
 } from '../types';
 import { CENTERS } from '../constants';
 import { getDepartments, getSubdepartmentsForDepartment, getItemTypesFromMasters } from '../utils/mastersHelpers';
 import { getBudgetForDocumentAndCoaCode } from '../utils/budgetHelpers';
+import { filterByWorkflowApproval } from '../utils/workflowV2Filters';
 import MultiSelect from './MultiSelect';
 import { AlertCircle, Info } from 'lucide-react';
 
@@ -19,11 +20,15 @@ interface PurchaseRequestModuleProps {
   currentUser: User;
   workflows: WorkflowRule[];
   budgets: Budget[];
+  workflowV2Rules?: WorkflowV2Rule[];
 }
 
 const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({ 
-  masters, purchaseRequests, setPurchaseRequests, onCreatePO, currentUser, workflows, budgets
+  masters, purchaseRequests, setPurchaseRequests, onCreatePO, currentUser, workflows, budgets, workflowV2Rules = []
 }) => {
+  const vendorsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Vendor', masters.Vendor ?? []) as MasterRecord[];
+  const itemsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Item', masters.Item ?? []) as MasterRecord[];
+  const budgetsForDeduction = filterByWorkflowApproval(workflowV2Rules, 'Budget', budgets);
   const [showForm, setShowForm] = useState(false);
   const [prForm, setPrForm] = useState<Partial<PurchaseRequest>>({
     entityName: masters.Entity?.[0]?.name || '',
@@ -101,7 +106,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
     const errors: string[] = [];
     pr.items?.forEach(item => {
       if (!item.coaCode) return;
-      const budget = getBudgetForDocumentAndCoaCode(budgets, item.coaCode, pr);
+      const budget = getBudgetForDocumentAndCoaCode(budgetsForDeduction, item.coaCode, pr);
       if (!budget) {
         errors.push(`No budget found for GL Code ${item.coaCode}`);
         return;
@@ -297,7 +302,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
                 onChange={e => setPrForm({ ...prForm, vendorId: e.target.value, vendorSiteId: '' })}
               >
                 <option value="">Select Vendor</option>
-                {masters.Vendor.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+                {vendorsForDropdown.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
               </select>
             </div>
             <div className="space-y-2">
@@ -478,7 +483,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
                         onChange={e => updateItem(item.id, 'itemName', e.target.value)}
                       >
                         <option value="">Select Item</option>
-                        {masters.Item.filter(i => !prForm.items?.some(selected => selected.id !== item.id && selected.itemName === i.name)).map(i => (
+                        {itemsForDropdown.filter(i => !prForm.items?.some(selected => selected.id !== item.id && selected.itemName === i.name)).map(i => (
                           <option key={i.id} value={i.name}>{i.name}</option>
                         ))}
                       </select>

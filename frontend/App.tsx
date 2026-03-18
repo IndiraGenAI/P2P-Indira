@@ -8,7 +8,9 @@ import UserManagement from './components/UserManagement';
 import RoleConfiguration from './components/RoleConfiguration';
 import WorkflowConfiguration from './components/WorkflowConfiguration';
 import WorkflowV2 from './components/WorkflowV2';
-import ItemVendorApprovalQueue from './components/ItemVendorApprovalQueue';
+import ItemApproval from './components/ItemApproval';
+import VendorApproval from './components/VendorApproval';
+import BudgetApproval from './components/BudgetApproval';
 import MastersManagement from './components/MastersManagement';
 import RateContractModule from './components/RateContractModule';
 import PurchaseRequestModule from './components/PurchaseRequestModule';
@@ -49,6 +51,10 @@ const App: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const initialFetchDone = useRef(false);
+  /** Bumped when masters are replaced from GET (load/refetch). Stale POST /masters must not overwrite. */
+  const mastersServerEpochRef = useRef(0);
+  /** Skip one auto-POST after server-driven setMasters (redundant write + race with stale POST). */
+  const skipMastersPostOnceRef = useRef(false);
 
   const [purchaseRequests, setPurchaseRequests] = useState<PurchaseRequest[]>([]);
   const [rateContracts, setRateContracts] = useState<RateContract[]>([]);
@@ -62,7 +68,9 @@ const App: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowRule[]>([]);
   const [workflowV2Rules, setWorkflowV2Rules] = useState<WorkflowV2Rule[]>([]);
-  const [pendingItemVendorCount, setPendingItemVendorCount] = useState(0);
+  const [pendingItemCount, setPendingItemCount] = useState(0);
+  const [pendingVendorCount, setPendingVendorCount] = useState(0);
+  const [pendingBudgetCount, setPendingBudgetCount] = useState(0);
   const [deptLimits, setDeptLimits] = useState<DepartmentLimit[]>([]);
   const [pendingPOFromPR, setPendingPOFromPR] = useState<PurchaseRequest | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -113,6 +121,8 @@ const App: React.FC = () => {
         consumedAmount: Math.max(0, Number(b.consumedAmount) || 0)
       })) : []);
       setBudgetAmendments(Array.isArray(amendRes) ? amendRes : []);
+      mastersServerEpochRef.current += 1;
+      skipMastersPostOnceRef.current = true;
       setMasters(mastersRes && typeof mastersRes === 'object' ? mastersRes as Record<MasterType, MasterRecord[]> : {});
       initialFetchDone.current = true;
     } catch (e) {
@@ -146,19 +156,26 @@ const App: React.FC = () => {
     loadData();
   }, [currentUser]);
 
-  const refreshPendingItemVendorCount = async () => {
+  const refreshPendingApprovalCounts = async () => {
     if (!currentUser) return;
     try {
-      const res = await apiGet<unknown[]>('workflow-v2/pending');
-      setPendingItemVendorCount(Array.isArray(res) ? res.length : 0);
+      const res = await apiGet<{ scope: string }[]>('workflow-v2/pending');
+      const list = Array.isArray(res) ? res : [];
+      setPendingItemCount(list.filter((p) => p.scope === 'Item').length);
+      setPendingVendorCount(list.filter((p) => p.scope === 'Vendor').length);
+      setPendingBudgetCount(list.filter((p) => p.scope === 'Budget').length);
     } catch {
-      setPendingItemVendorCount(0);
+      setPendingItemCount(0);
+      setPendingVendorCount(0);
+      setPendingBudgetCount(0);
     }
   };
 
   const refetchMasters = async () => {
     try {
       const mastersRes = await apiGet<Record<string, MasterRecord[]>>('masters');
+      mastersServerEpochRef.current += 1;
+      skipMastersPostOnceRef.current = true;
       setMasters(mastersRes && typeof mastersRes === 'object' ? mastersRes as Record<MasterType, MasterRecord[]> : {});
     } catch (e) {
       console.error(e);
@@ -167,8 +184,17 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!currentUser) return;
-    refreshPendingItemVendorCount();
+    refreshPendingApprovalCounts();
   }, [currentUser?.id, masters]);
+
+  // Refetch users when opening Workflow (V2) so the assignee dropdown shows all current users
+  useEffect(() => {
+    if (activeTab === 'workflow_v2' && currentUser) {
+      apiGet<User[]>('users')
+        .then((r) => setUsers(Array.isArray(r) ? r : []))
+        .catch(() => {});
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     if (!currentUser || !roles.length) return;
@@ -246,10 +272,18 @@ const App: React.FC = () => {
   }, [workflows]);
   useEffect(() => {
     if (!initialFetchDone.current) return;
+    if (skipMastersPostOnceRef.current) {
+      skipMastersPostOnceRef.current = false;
+      return;
+    }
+    const epochAtStart = mastersServerEpochRef.current;
     apiPost('masters', masters)
       .then((res) => {
-        if (res && typeof res === 'object' && !('error' in res))
+        if (mastersServerEpochRef.current !== epochAtStart) return;
+        if (res && typeof res === 'object' && !('error' in res)) {
+          skipMastersPostOnceRef.current = true;
           setMasters(res as Record<MasterType, MasterRecord[]>);
+        }
       })
       .catch(console.error);
   }, [masters]);
@@ -307,10 +341,13 @@ const App: React.FC = () => {
   };
 
   const renderContent = () => {
-    const adminTabs: NavigationTab[] = ['users', 'roles', 'workflows', 'workflow_v2'];
-    if (adminTabs.includes(activeTab)) {
-      const isSuperAdmin = roles.filter(r => currentUser?.roleIds.includes(r.id)).some(r => r.name === 'Super Admin');
-      if (!isSuperAdmin) return <div className="p-8 text-center font-bold text-slate-500">Access Denied: Admin privileges required.</div>;
+    const isSuperAdmin = roles.filter(r => currentUser?.roleIds.includes(r.id)).some(r => r.name === 'Super Admin');
+    const superAdminOnlyTabs: NavigationTab[] = ['users', 'roles', 'workflows'];
+    if (superAdminOnlyTabs.includes(activeTab) && !isSuperAdmin) {
+      return <div className="p-8 text-center font-bold text-slate-500">Access Denied: Admin privileges required.</div>;
+    }
+    if (activeTab === 'workflow_v2' && !isSuperAdmin && !hasPermission(ModuleType.WORKFLOW_V2, 'view')) {
+      return <div className="p-8 text-center font-bold text-slate-500">Access Denied: Workflow (V2) permission required.</div>;
     }
 
     switch (activeTab) {
@@ -319,10 +356,12 @@ const App: React.FC = () => {
       case 'roles': return <RoleConfiguration roles={roles} setRoles={setRoles} />;
       case 'workflows': return <WorkflowConfiguration workflows={workflows} setWorkflows={setWorkflows} users={users} masters={masters} />;
       case 'workflow_v2': return <WorkflowV2 workflowV2Rules={workflowV2Rules} setWorkflowV2Rules={setWorkflowV2Rules} users={users} masters={masters} />;
-      case 'item_vendor_approval': return <ItemVendorApprovalQueue masters={masters} users={users} currentUser={currentUser!} onAction={refreshPendingItemVendorCount} />;
+      case 'item_approval': return <ItemApproval masters={masters} users={users} currentUser={currentUser!} onAction={refreshPendingApprovalCounts} refetchMasters={refetchMasters} />;
+      case 'vendor_approval': return <VendorApproval masters={masters} users={users} currentUser={currentUser!} onAction={refreshPendingApprovalCounts} refetchMasters={refetchMasters} />;
+      case 'budget_approval': return <BudgetApproval budgets={budgets} users={users} currentUser={currentUser!} onAction={refreshPendingApprovalCounts} setBudgets={setBudgets} refetchMasters={refetchMasters} />;
       case 'masters':
         if (!hasPermission(ModuleType.MASTERS, 'view')) return <div className="p-8 text-center font-bold text-slate-500">Access Denied</div>;
-        return <MastersManagement masters={masters} onUpdate={updateMasters} allowedMasterTypes={getMastersAllowedTypes()} mastersPermissions={getMastersPermissions()} onRefreshPendingItemVendor={refreshPendingItemVendorCount} refetchMasters={refetchMasters} workflowV2Rules={workflowV2Rules} />;
+        return <MastersManagement masters={masters} onUpdate={updateMasters} allowedMasterTypes={getMastersAllowedTypes()} mastersPermissions={getMastersPermissions()} onRefreshPendingItemVendor={refreshPendingApprovalCounts} refetchMasters={refetchMasters} workflowV2Rules={workflowV2Rules} />;
       case 'purchase_request':
         if (!hasPermission(ModuleType.PR, 'view')) return <div className="p-8 text-center font-bold text-slate-500">Access Denied</div>;
         return (
@@ -337,6 +376,7 @@ const App: React.FC = () => {
             currentUser={currentUser!}
             workflows={workflows}
             budgets={budgets}
+            workflowV2Rules={workflowV2Rules}
           />
         );
       case 'rate_contract':
@@ -352,6 +392,7 @@ const App: React.FC = () => {
             setInvoices={setInvoices}
             currentUser={currentUser!}
             workflows={workflows}
+            workflowV2Rules={workflowV2Rules}
           />
         );
       case 'purchase_order':
@@ -371,6 +412,7 @@ const App: React.FC = () => {
             workflows={workflows}
             budgets={budgets}
             setBudgets={setBudgets}
+            workflowV2Rules={workflowV2Rules}
           />
         );
       case 'direct_invoice':
@@ -384,6 +426,7 @@ const App: React.FC = () => {
             setBudgets={setBudgets}
             directInvoices={directInvoices}
             setDirectInvoices={setDirectInvoices}
+            workflowV2Rules={workflowV2Rules}
           />
         );
       case 'budgets':
@@ -398,6 +441,8 @@ const App: React.FC = () => {
             currentUser={currentUser!}
             purchaseOrders={purchaseOrders}
             purchaseRequests={purchaseRequests}
+            workflowV2Rules={workflowV2Rules}
+            onRefreshPendingCounts={refreshPendingApprovalCounts}
           />
         );
       default: return <Dashboard users={users} roles={roles} />;
@@ -441,7 +486,7 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50 font-sans text-slate-900">
-      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} currentUser={currentUser} roles={roles} onLogout={handleLogout} pendingItemVendorCount={pendingItemVendorCount} />
+      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} currentUser={currentUser} roles={roles} onLogout={handleLogout} pendingItemCount={pendingItemCount} pendingVendorCount={pendingVendorCount} pendingBudgetCount={pendingBudgetCount} />
       <main className="flex-1 overflow-y-auto p-8 relative">
         {showSessionWarning && (
           <div className="sticky top-0 z-30 mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-center text-sm font-bold text-amber-800 shadow-sm">

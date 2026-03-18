@@ -8,11 +8,12 @@ interface SidebarProps {
   currentUser: User;
   roles: Role[];
   onLogout: () => void;
-  /** Count of Item/Vendor approvals pending for current user (yellow dot on Vendor/Item Approval). */
-  pendingItemVendorCount?: number;
+  pendingItemCount?: number;
+  pendingVendorCount?: number;
+  pendingBudgetCount?: number;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, roles, onLogout, pendingItemVendorCount = 0 }) => {
+const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser, roles, onLogout, pendingItemCount = 0, pendingVendorCount = 0, pendingBudgetCount = 0 }) => {
   const isSuperAdmin = roles.filter(r => currentUser.roleIds.includes(r.id)).some(r => r.name === 'Super Admin');
 
   const hasPermission = (module: ModuleType) => {
@@ -42,12 +43,25 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
     { 
       id: 'workflow_v2', 
       label: 'Workflow (V2)', 
-      adminOnly: true,
+      module: ModuleType.WORKFLOW_V2,
       icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" /></svg> 
     },
     { 
-      id: 'item_vendor_approval', 
-      label: 'Vendor/Item Approval', 
+      id: 'item_approval', 
+      label: 'Item Approval', 
+      module: ModuleType.ITEM_APPROVAL,
+      icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> 
+    },
+    { 
+      id: 'vendor_approval', 
+      label: 'Vendor Approval', 
+      module: ModuleType.VENDOR_APPROVAL,
+      icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> 
+    },
+    { 
+      id: 'budget_approval', 
+      label: 'Budget Approval', 
+      module: ModuleType.BUDGET_APPROVAL,
       icon: <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg> 
     },
     { 
@@ -125,8 +139,14 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
             >
               {item.icon}
               <span className="font-medium flex-1 text-left">{item.label}</span>
-              {item.id === 'item_vendor_approval' && pendingItemVendorCount > 0 && (
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 flex-shrink-0" title={`${pendingItemVendorCount} pending`} />
+              {item.id === 'item_approval' && pendingItemCount > 0 && (
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 flex-shrink-0" title={`${pendingItemCount} pending`} />
+              )}
+              {item.id === 'vendor_approval' && pendingVendorCount > 0 && (
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 flex-shrink-0" title={`${pendingVendorCount} pending`} />
+              )}
+              {item.id === 'budget_approval' && pendingBudgetCount > 0 && (
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 flex-shrink-0" title={`${pendingBudgetCount} pending`} />
               )}
             </button>
           ))}

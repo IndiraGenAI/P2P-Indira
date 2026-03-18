@@ -4,10 +4,11 @@ import Papa from 'papaparse';
 import { 
   RateContract, GRN, Invoice, MasterRecord, MasterType, 
   Frequency, Attachment, ItemLine,
-  User, WorkflowRule, ModuleType, ApprovalType
+  User, WorkflowRule, ModuleType, ApprovalType, WorkflowV2Rule
 } from '../types';
 import { CENTERS } from '../constants';
 import { getDepartments, getSubdepartmentsForDepartment, getItemTypesFromMasters } from '../utils/mastersHelpers';
+import { filterByWorkflowApproval } from '../utils/workflowV2Filters';
 import MultiSelect from './MultiSelect';
 import SearchableSelect from './SearchableSelect';
 
@@ -21,13 +22,16 @@ interface RateContractModuleProps {
   setInvoices: React.Dispatch<React.SetStateAction<Invoice[]>>;
   currentUser: User;
   workflows: WorkflowRule[];
+  workflowV2Rules?: WorkflowV2Rule[];
 }
 
 type ViewMode = 'RC' | 'GRN' | 'Invoice';
 
 const RateContractModule: React.FC<RateContractModuleProps> = ({ 
-  masters, rateContracts, setRateContracts, grns, setGrns, invoices, setInvoices, currentUser, workflows
+  masters, rateContracts, setRateContracts, grns, setGrns, invoices, setInvoices, currentUser, workflows, workflowV2Rules = []
 }) => {
+  const vendorsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Vendor', masters.Vendor ?? []) as MasterRecord[];
+  const itemsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Item', masters.Item ?? []) as MasterRecord[];
   const [viewMode, setViewMode] = useState<ViewMode>('RC');
   
   const [showForm, setShowForm] = useState(false);
@@ -807,7 +811,7 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                     disabled={isRcReadOnly}
                   >
                     <option value="">Select Vendor</option>
-                    {(masters['Vendor'] || []).map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+                    {vendorsForDropdown.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
                   </select>
                 </div>
                 <div className="space-y-2">
@@ -989,7 +993,7 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                           <div className="col-span-2 space-y-1">
                             <SearchableSelect
                               label="Item Name"
-                              options={(masters['Item'] || []).map(i => ({ id: i.id, name: i.name }))}
+                              options={itemsForDropdown.map(i => ({ id: i.id, name: i.name }))}
                               value={item.itemName ?? ''}
                               onChange={v => updateItem(item.id, 'itemName', v)}
                               placeholder="Select Item"

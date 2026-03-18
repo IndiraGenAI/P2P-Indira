@@ -1,6 +1,9 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { WorkflowV2Rule, User, ApprovalType, ApprovalStep, MasterRecord } from '../types';
-import { apiPost, apiGet } from '../api';
+import { apiPost } from '../api';
+
+const MENU_WIDTH = 256;
 
 const MultiUserSelector: React.FC<{
   selectedUserIds: string[];
@@ -9,70 +12,140 @@ const MultiUserSelector: React.FC<{
 }> = ({ selectedUserIds, users, onChange }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const wrapperRef = useRef<HTMLDivElement>(null);
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0, maxListH: 320 });
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  const updateMenuPosition = () => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const margin = 8;
+    const left = Math.max(margin, Math.min(r.left, window.innerWidth - MENU_WIDTH - margin));
+    const top = r.bottom + 4;
+    const maxListH = Math.max(200, Math.min(384, window.innerHeight - top - margin - 52));
+    setMenuPos({ top, left, maxListH });
+  };
+
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    updateMenuPosition();
+    window.addEventListener('scroll', updateMenuPosition, true);
+    window.addEventListener('resize', updateMenuPosition);
+    return () => {
+      window.removeEventListener('scroll', updateMenuPosition, true);
+      window.removeEventListener('resize', updateMenuPosition);
+    };
+  }, [isOpen]);
 
   useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) setIsOpen(false);
+    if (!isOpen) return;
+    function handleMouseDown(e: MouseEvent) {
+      const t = e.target as Node;
+      if (triggerRef.current?.contains(t)) return;
+      if (dropdownRef.current?.contains(t)) return;
+      setIsOpen(false);
     }
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [wrapperRef]);
+    document.addEventListener('mousedown', handleMouseDown);
+    return () => document.removeEventListener('mousedown', handleMouseDown);
+  }, [isOpen]);
 
-  const filteredUsers = users.filter(
-    (u) =>
-      u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      u.email.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredUsers = users.filter((u) => {
+    const n = (u.name || '').toLowerCase();
+    const e = (u.email || '').toLowerCase();
+    const q = searchTerm.toLowerCase();
+    return n.includes(q) || e.includes(q);
+  });
 
   const toggleUser = (userId: string) => {
     if (selectedUserIds.includes(userId)) onChange(selectedUserIds.filter((id) => id !== userId));
     else onChange([...selectedUserIds, userId]);
   };
 
-  return (
-    <div className="relative inline-block" ref={wrapperRef}>
+  const dropdown = isOpen ? (
+    <div
+      ref={dropdownRef}
+      className="fixed z-[10000] bg-white border border-slate-200 rounded-xl shadow-2xl overflow-hidden"
+      style={{ top: menuPos.top, left: menuPos.left, width: MENU_WIDTH }}
+      role="listbox"
+    >
+      <div className="p-2 bg-slate-50 border-b border-slate-100">
+        <div className="relative">
+          <input
+            autoFocus
+            type="text"
+            placeholder="Search name or email..."
+            className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 outline-none"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+          <svg className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+        </div>
+      </div>
       <div
-        onClick={() => setIsOpen(!isOpen)}
-        className="text-[11px] font-bold text-slate-700 bg-transparent border-none focus:ring-0 min-w-[140px] cursor-pointer hover:bg-slate-50 px-2 py-1 rounded transition-colors flex items-center justify-between group"
+        className="overflow-y-auto scrollbar-thin scrollbar-thumb-slate-200 min-h-[120px] bg-white"
+        style={{ maxHeight: menuPos.maxListH }}
+      >
+        {filteredUsers.length > 0 ? (
+          filteredUsers.map((u) => (
+            <button
+              key={u.id}
+              type="button"
+              onClick={() => toggleUser(u.id)}
+              className={`w-full text-left px-3 py-2 hover:bg-indigo-50 flex items-center justify-between transition-colors ${selectedUserIds.includes(u.id) ? 'bg-indigo-50/50' : ''}`}
+            >
+              <div className="flex flex-col min-w-0 flex-1">
+                <span className="text-[11px] font-bold text-slate-800 truncate">{u.name || '—'}</span>
+                <span className="text-[9px] text-slate-400 font-medium truncate">{u.email || ''}</span>
+              </div>
+              {selectedUserIds.includes(u.id) && (
+                <svg className="w-4 h-4 text-indigo-600 flex-shrink-0 ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" />
+                </svg>
+              )}
+            </button>
+          ))
+        ) : (
+          <div className="px-3 py-4 text-center text-[10px] text-slate-400 font-bold uppercase tracking-widest">No matching users</div>
+        )}
+      </div>
+    </div>
+  ) : null;
+
+  const toggleOpen = () => {
+    setIsOpen((o) => {
+      if (o) return false;
+      const el = triggerRef.current;
+      if (el) {
+        const r = el.getBoundingClientRect();
+        const margin = 8;
+        const left = Math.max(margin, Math.min(r.left, window.innerWidth - MENU_WIDTH - margin));
+        const top = r.bottom + 4;
+        const maxListH = Math.max(200, Math.min(384, window.innerHeight - top - margin - 52));
+        setMenuPos({ top, left, maxListH });
+      }
+      return true;
+    });
+  };
+
+  return (
+    <>
+      <div
+        ref={triggerRef}
+        onClick={toggleOpen}
+        className="text-[11px] font-bold text-slate-700 bg-transparent border-none focus:ring-0 min-w-[140px] cursor-pointer hover:bg-slate-50 px-2 py-1 rounded transition-colors flex items-center justify-between group inline-flex"
       >
         <span className="truncate max-w-[120px]">
-          {selectedUserIds.length > 0 ? `${selectedUserIds.length} User(s)` : 'Select User(s)'}
+          {selectedUserIds.length > 0 ? `${selectedUserIds.length} User(s) Selected` : 'Select User(s)'}
         </span>
         <svg className={`w-3 h-3 ml-1 text-slate-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
         </svg>
       </div>
-      {isOpen && (
-        <div className="absolute z-[100] mt-1 w-64 bg-white border border-slate-200 rounded-xl shadow-2xl overflow-hidden">
-          <div className="p-2 bg-slate-50 border-b border-slate-100">
-            <input
-              type="text"
-              placeholder="Search..."
-              className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500/20 outline-none"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
-          <div className="max-h-64 overflow-y-auto">
-            {filteredUsers.map((u) => (
-              <button
-                key={u.id}
-                onClick={() => toggleUser(u.id)}
-                className={`w-full text-left px-3 py-2 hover:bg-indigo-50 flex items-center justify-between ${selectedUserIds.includes(u.id) ? 'bg-indigo-50/50' : ''}`}
-              >
-                <span className="text-[11px] font-bold text-slate-800">{u.name}</span>
-                {selectedUserIds.includes(u.id) && (
-                  <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" />
-                  </svg>
-                )}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
+      {dropdown && createPortal(dropdown, document.body)}
+    </>
   );
 };
 
@@ -83,19 +156,14 @@ interface WorkflowV2Props {
   masters: Record<string, MasterRecord[]>;
 }
 
+const SCOPE_LABELS: Record<string, string> = { Item: 'Items', Vendor: 'Vendors', Budget: 'Budgets' };
+
 const WorkflowV2: React.FC<WorkflowV2Props> = ({ workflowV2Rules, setWorkflowV2Rules, users, masters }) => {
-  const [scope, setScope] = useState<'Item' | 'Vendor'>('Item');
-  const [selectedMasterId, setSelectedMasterId] = useState<string>('');
+  const [scope, setScope] = useState<'Item' | 'Vendor' | 'Budget'>('Item');
   const [approvalChain, setApprovalChain] = useState<ApprovalStep[]>([]);
   const [saving, setSaving] = useState(false);
 
-  const items = (masters['Item'] || []) as MasterRecord[];
-  const vendors = (masters['Vendor'] || []) as MasterRecord[];
-  const options = scope === 'Item' ? items : vendors;
-
-  const existingRule = selectedMasterId
-    ? workflowV2Rules.find((r) => r.scope === scope && r.masterId === selectedMasterId)
-    : null;
+  const existingRule = workflowV2Rules.find((r) => r.scope === scope && r.masterId === '__ALL__') ?? null;
 
   useEffect(() => {
     if (existingRule && existingRule.approvalChain?.length) {
@@ -103,7 +171,7 @@ const WorkflowV2: React.FC<WorkflowV2Props> = ({ workflowV2Rules, setWorkflowV2R
     } else {
       setApprovalChain([{ id: `step-${Date.now()}`, type: ApprovalType.REVIEWER, userIds: [users[0]?.id || ''] }]);
     }
-  }, [selectedMasterId, scope, existingRule?.id]);
+  }, [scope, existingRule?.id]);
 
   const handleAddStep = () => {
     setApprovalChain((prev) => [
@@ -121,18 +189,14 @@ const WorkflowV2: React.FC<WorkflowV2Props> = ({ workflowV2Rules, setWorkflowV2R
   };
 
   const handleSave = async () => {
-    if (!selectedMasterId) {
-      alert('Select an Item or Vendor first.');
-      return;
-    }
     if (approvalChain.length === 0 || approvalChain.some((s) => !s.userIds?.length)) {
       alert('Add at least one step with at least one user.');
       return;
     }
     setSaving(true);
     try {
-      const id = existingRule?.id || `wv2-${scope}-${selectedMasterId}-${Date.now()}`;
-      const payload = [{ id, scope, masterId: selectedMasterId, approvalChain, isActive: true }];
+      const id = existingRule?.id || `wv2-${scope}-__ALL__-${Date.now()}`;
+      const payload = [{ id, scope, masterId: '__ALL__', approvalChain, isActive: true }];
       const res = await apiPost<WorkflowV2Rule[]>('workflow-v2', payload);
       setWorkflowV2Rules(Array.isArray(res) ? res : []);
       alert('Workflow saved.');
@@ -150,42 +214,23 @@ const WorkflowV2: React.FC<WorkflowV2Props> = ({ workflowV2Rules, setWorkflowV2R
           <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Scope</label>
           <select
             value={scope}
-            onChange={(e) => {
-              setScope(e.target.value as 'Item' | 'Vendor');
-              setSelectedMasterId('');
-            }}
+            onChange={(e) => setScope(e.target.value as 'Item' | 'Vendor' | 'Budget')}
             className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 focus:ring-4 focus:ring-indigo-500/10 outline-none"
           >
             <option value="Item">Item</option>
             <option value="Vendor">Vendor</option>
-          </select>
-        </div>
-        <div className="max-w-xs space-y-2">
-          <label className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">
-            Select {scope}
-          </label>
-          <select
-            value={selectedMasterId}
-            onChange={(e) => setSelectedMasterId(e.target.value)}
-            className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl font-bold text-slate-800 focus:ring-4 focus:ring-indigo-500/10 outline-none"
-          >
-            <option value="">— Select —</option>
-            {options.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name || m.id}
-              </option>
-            ))}
+            <option value="Budget">Budget</option>
           </select>
         </div>
       </div>
 
       <div className="flex-1 p-8">
-        {!selectedMasterId ? (
-          <p className="text-slate-500 font-bold">Select an Item or Vendor above to set its approval workflow.</p>
-        ) : (
-          <>
+        <p className="text-slate-500 font-bold mb-4">
+          Configure the approval chain for all {SCOPE_LABELS[scope] || scope}.
+        </p>
+        <>
             <h3 className="text-sm font-black text-slate-700 uppercase tracking-wider mb-4">
-              Approval sequence for {scope} — {options.find((m) => m.id === selectedMasterId)?.name || selectedMasterId}
+              Approval sequence for all {SCOPE_LABELS[scope] || scope}
             </h3>
             <div className="flex flex-wrap items-center gap-4">
               {approvalChain.map((step, idx) => {
@@ -251,14 +296,13 @@ const WorkflowV2: React.FC<WorkflowV2Props> = ({ workflowV2Rules, setWorkflowV2R
                 Add Step
               </button>
             </div>
-          </>
-        )}
+        </>
       </div>
 
       <div className="p-8 border-t border-slate-200 bg-slate-50 flex justify-end">
         <button
           onClick={handleSave}
-          disabled={!selectedMasterId || saving}
+          disabled={approvalChain.length === 0 || approvalChain.some((s) => !s.userIds?.length) || saving}
           className="px-10 py-3 bg-indigo-600 text-white font-black text-xs uppercase tracking-[0.2em] rounded-xl hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {saving ? 'Saving...' : 'Save Workflow'}
