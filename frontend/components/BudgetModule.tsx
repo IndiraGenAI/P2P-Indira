@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Budget, BudgetAmendment, BudgetType, BudgetControlType, BudgetValidity, MasterRecord, MasterType, User, PurchaseOrder, PurchaseRequest, WorkflowV2Rule } from '../types';
 import { getDepartments, getSubdepartmentsForDepartment } from '../utils/mastersHelpers';
 import { apiPatch } from '../api';
@@ -19,8 +19,28 @@ interface BudgetModuleProps {
   onRefreshPendingCounts?: () => void;
 }
 
+const BUDGET_AUTO_SUBMIT_MS = 4000;
+
 const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendments, setAmendments, masters, currentUser, purchaseOrders, purchaseRequests, workflowV2Rules = [], onRefreshPendingCounts }) => {
   const budgetWorkflowExists = workflowV2Rules.some((r) => r.scope === 'Budget' && r.masterId === '__ALL__' && r.isActive);
+  const [budgetAutoSubmitUntil, setBudgetAutoSubmitUntil] = useState<Record<string, number>>({});
+  const [budgetWorkflowSubmitting, setBudgetWorkflowSubmitting] = useState<Record<string, boolean>>({});
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  const budgetAutoSubmitTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(
+    () => () => {
+      Object.values(budgetAutoSubmitTimeoutsRef.current).forEach(clearTimeout);
+      budgetAutoSubmitTimeoutsRef.current = {};
+    },
+    []
+  );
+
   const [view, setView] = useState<'list' | 'amendments' | 'reports'>('list');
   const [showAddModal, setShowAddModal] = useState(false);
   const [showAmendModal, setShowAmendModal] = useState(false);
@@ -51,6 +71,35 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
     };
     setBudgets([...budgets, budget]);
     setShowAddModal(false);
+    if (budgetWorkflowExists) {
+      setBudgetAutoSubmitUntil((prev) => ({
+        ...prev,
+        [budget.id]: Date.now() + BUDGET_AUTO_SUBMIT_MS,
+      }));
+      if (budgetAutoSubmitTimeoutsRef.current[budget.id]) clearTimeout(budgetAutoSubmitTimeoutsRef.current[budget.id]);
+      budgetAutoSubmitTimeoutsRef.current[budget.id] = setTimeout(async () => {
+        delete budgetAutoSubmitTimeoutsRef.current[budget.id];
+        setBudgetAutoSubmitUntil((prev) => {
+          const next = { ...prev };
+          delete next[budget.id];
+          return next;
+        });
+        setBudgetWorkflowSubmitting((prev) => ({ ...prev, [budget.id]: true }));
+        try {
+          const updated = await apiPatch<Budget>(`budgets/${budget.id}/workflow`, { action: 'submit' });
+          setBudgets((prev) => prev.map((b) => (b.id === budget.id ? { ...b, ...updated } : b)));
+          onRefreshPendingCounts?.();
+        } catch (e) {
+          alert((e as Error).message || 'Auto-submit failed; use Submit for approval.');
+        } finally {
+          setBudgetWorkflowSubmitting((prev) => {
+            const next = { ...prev };
+            delete next[budget.id];
+            return next;
+          });
+        }
+      }, BUDGET_AUTO_SUBMIT_MS);
+    }
   };
 
   const handleAmendBudget = () => {
@@ -187,23 +236,43 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
                         }`}>
                           {budget.workflowStatus || 'Draft'}
                         </span>
-                        {((budget.workflowStatus === 'Draft' || !budget.workflowStatus) && (
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              try {
-                                const updated = await apiPatch<Budget>(`budgets/${budget.id}/workflow`, { action: 'submit' });
-                                setBudgets((prev) => prev.map((b) => (b.id === budget.id ? { ...b, ...updated } : b)));
-                                onRefreshPendingCounts?.();
-                              } catch (e) {
-                                alert((e as Error).message || 'Submit failed');
-                              }
-                            }}
-                            className="ml-2 px-3 py-1 bg-indigo-600 text-white text-[9px] font-black uppercase rounded-lg hover:bg-indigo-700"
-                          >
-                            Submit for approval
-                          </button>
-                        ))}
+                        {((budget.workflowStatus === 'Draft' || !budget.workflowStatus) &&
+                          (() => {
+                            const until = budgetAutoSubmitUntil[budget.id];
+                            const secsLeft = until ? Math.max(0, Math.ceil((until - nowTick) / 1000)) : 0;
+                            const inCooldown = until != null && nowTick < until;
+                            if (budgetWorkflowSubmitting[budget.id]) {
+                              return (
+                                <span className="ml-2 inline-block px-3 py-1 bg-indigo-100 text-indigo-700 text-[9px] font-black uppercase rounded-lg">
+                                  Submitting…
+                                </span>
+                              );
+                            }
+                            if (inCooldown) {
+                              return (
+                                <span className="ml-2 inline-block px-3 py-1 bg-slate-200 text-slate-600 text-[9px] font-black uppercase rounded-lg tabular-nums">
+                                  Auto-submit in {secsLeft}s
+                                </span>
+                              );
+                            }
+                            return (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    const updated = await apiPatch<Budget>(`budgets/${budget.id}/workflow`, { action: 'submit' });
+                                    setBudgets((prev) => prev.map((b) => (b.id === budget.id ? { ...b, ...updated } : b)));
+                                    onRefreshPendingCounts?.();
+                                  } catch (e) {
+                                    alert((e as Error).message || 'Submit failed');
+                                  }
+                                }}
+                                className="ml-2 px-3 py-1 bg-indigo-600 text-white text-[9px] font-black uppercase rounded-lg hover:bg-indigo-700"
+                              >
+                                Submit for approval
+                              </button>
+                            );
+                          })())}
                       </td>
                     )}
                     <td className="p-4 text-right">

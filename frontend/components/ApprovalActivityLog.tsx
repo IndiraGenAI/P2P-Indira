@@ -41,7 +41,8 @@ export const ApprovalActivityLog: React.FC<{
   items: WorkspaceActivityItem[];
   users: User[];
   title?: string;
-}> = ({ items, users, title = 'Activity & waiting list' }) => {
+  onView?: (masterId: string) => void;
+}> = ({ items, users, title = 'Activity & waiting list', onView }) => {
   if (!items.length) {
     return (
       <div className="mt-10 pt-8 border-t border-slate-200">
@@ -62,8 +63,19 @@ export const ApprovalActivityLog: React.FC<{
             key={row.masterId}
             className="border border-slate-100 rounded-xl p-4 bg-slate-50/80 text-left"
           >
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <p className="font-black text-slate-800">{row.masterName || row.masterId}</p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="font-black text-slate-800">{row.masterName || row.masterId}</p>
+                {onView && (
+                  <button
+                    type="button"
+                    onClick={() => onView(row.masterId)}
+                    className="px-3 py-1 text-[10px] font-black uppercase text-indigo-600 border border-indigo-200 rounded-lg hover:bg-indigo-50"
+                  >
+                    View
+                  </button>
+                )}
+              </div>
               <span
                 className={`text-[10px] font-black uppercase px-2 py-0.5 rounded ${
                   row.workflowStatus === 'Pending'

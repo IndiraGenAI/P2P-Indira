@@ -1,9 +1,9 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { MasterRecord, MasterType, WorkflowV2Rule } from '../types';
 
-/** Seconds after Deploy before Submit for approval appears (covers POST /masters latency). */
-const SUBMIT_APPROVAL_DELAY_SEC = 3;
+/** After create: wait for POST /masters, then auto-submit workflow (same PATCH as manual). */
+const SUBMIT_APPROVAL_DELAY_SEC = 4;
 import { COA_CATEGORIES, GST_TYPES, TRANSACTION_TYPES, CENTERS, ENTITIES, MASTER_GROUPS } from '../constants';
 import { getAllSubdepartments } from '../utils/mastersHelpers';
 import MultiSelect from './MultiSelect';
@@ -28,12 +28,22 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
   
   const [formData, setFormData] = useState<Record<string, any>>({});
   const [submitCooldownUntil, setSubmitCooldownUntil] = useState<Record<string, number>>({});
+  const [masterWorkflowSubmitting, setMasterWorkflowSubmitting] = useState<Record<string, boolean>>({});
   const [nowTick, setNowTick] = useState(() => Date.now());
+  const autoSubmitTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   useEffect(() => {
     const t = setInterval(() => setNowTick(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
+
+  useEffect(
+    () => () => {
+      Object.values(autoSubmitTimeoutsRef.current).forEach(clearTimeout);
+      autoSubmitTimeoutsRef.current = {};
+    },
+    []
+  );
 
   const filteredGroups =
     allowedMasterTypes === null || !Array.isArray(allowedMasterTypes)
@@ -97,10 +107,38 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
       updated = [...currentRecords, newRecord];
       if (activeSubTab === 'Item' || activeSubTab === 'Vendor') {
         const key = `${activeSubTab}:${newRecord.id}`;
-        setSubmitCooldownUntil((prev) => ({
-          ...prev,
-          [key]: Date.now() + SUBMIT_APPROVAL_DELAY_SEC * 1000,
-        }));
+        const hasWf = workflowV2Rules.some(
+          (r) => r.scope === activeSubTab && r.masterId === '__ALL__' && r.isActive
+        );
+        if (hasWf && refetchMasters && onRefreshPendingItemVendor) {
+          setSubmitCooldownUntil((prev) => ({
+            ...prev,
+            [key]: Date.now() + SUBMIT_APPROVAL_DELAY_SEC * 1000,
+          }));
+          if (autoSubmitTimeoutsRef.current[key]) clearTimeout(autoSubmitTimeoutsRef.current[key]);
+          autoSubmitTimeoutsRef.current[key] = setTimeout(async () => {
+            delete autoSubmitTimeoutsRef.current[key];
+            setSubmitCooldownUntil((prev) => {
+              const next = { ...prev };
+              delete next[key];
+              return next;
+            });
+            setMasterWorkflowSubmitting((prev) => ({ ...prev, [key]: true }));
+            try {
+              await apiPatch(`masters/${activeSubTab}/${newRecord.id}/workflow`, { action: 'submit' });
+              await refetchMasters();
+              onRefreshPendingItemVendor();
+            } catch (e) {
+              alert((e as Error).message || 'Auto-submit failed; use Submit for approval.');
+            } finally {
+              setMasterWorkflowSubmitting((prev) => {
+                const next = { ...prev };
+                delete next[key];
+                return next;
+              });
+            }
+          }, SUBMIT_APPROVAL_DELAY_SEC * 1000);
+        }
       }
     }
     onUpdate(activeSubTab, updated);
@@ -753,9 +791,17 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
                               const until = submitCooldownUntil[cdKey];
                               const secsLeft = until ? Math.max(0, Math.ceil((until - nowTick) / 1000)) : 0;
                               const inCooldown = until != null && nowTick < until;
+                              const submitting = masterWorkflowSubmitting[cdKey];
+                              if (submitting) {
+                                return (
+                                  <span className="ml-2 inline-block px-3 py-1 bg-indigo-100 text-indigo-700 text-[9px] font-black uppercase rounded-lg">
+                                    Submitting…
+                                  </span>
+                                );
+                              }
                               return inCooldown ? (
                                 <span className="ml-2 inline-block px-3 py-1 bg-slate-200 text-slate-600 text-[9px] font-black uppercase rounded-lg tabular-nums">
-                                  Submit in {secsLeft}s
+                                  Auto-submit in {secsLeft}s
                                 </span>
                               ) : (
                                 <button
