@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Papa from 'papaparse';
 import { 
   Invoice, MasterRecord, MasterType, 
@@ -10,7 +10,14 @@ import { CENTERS } from '../constants';
 import { getDepartments, getSubdepartmentsForDepartment, getItemTypesFromMasters } from '../utils/mastersHelpers';
 import { getBudgetForDocumentAndCoaCode } from '../utils/budgetHelpers';
 import { filterByWorkflowApproval } from '../utils/workflowV2Filters';
+import {
+  inCreatedAtRange,
+  matchesStatusQuickFilter,
+  matchesVendorFilter,
+  textIncludes,
+} from '../utils/transactionListFilters';
 import MultiSelect from './MultiSelect';
+import TransactionListFilterBar, { ListStatusQuick } from './TransactionListFilterBar';
 
 interface DirectInvoiceModuleProps {
   masters: Record<MasterType, MasterRecord[]>;
@@ -26,8 +33,60 @@ interface DirectInvoiceModuleProps {
 const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, currentUser, workflows, budgets, setBudgets, directInvoices, setDirectInvoices, workflowV2Rules = [] }) => {
   const vendorsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Vendor', masters.Vendor ?? []) as MasterRecord[];
   const itemsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Item', masters.Item ?? []) as MasterRecord[];
-  const budgetsForDeduction = filterByWorkflowApproval(workflowV2Rules, 'Budget', budgets);
+  const budgetsForDeduction = filterByWorkflowApproval<Budget>(workflowV2Rules, 'Budget', budgets);
   const [showForm, setShowForm] = useState(false);
+
+  const [listStatusQuick, setListStatusQuick] = useState<ListStatusQuick>('all');
+  const [listDateFrom, setListDateFrom] = useState('');
+  const [listDateTo, setListDateTo] = useState('');
+  const [listVendorId, setListVendorId] = useState('');
+  const [colInvId, setColInvId] = useState('');
+  const [colInvVendor, setColInvVendor] = useState('');
+  const [colInvDate, setColInvDate] = useState('');
+  const [colInvAmt, setColInvAmt] = useState('');
+  const [colInvStatus, setColInvStatus] = useState('');
+
+  const diApprovedCount = useMemo(
+    () => directInvoices.filter((i) => i.status === 'Approved').length,
+    [directInvoices]
+  );
+  const diPendingCount = useMemo(
+    () => directInvoices.filter((i) => i.status === 'Pending').length,
+    [directInvoices]
+  );
+
+  const vendorOptionsForList = useMemo(
+    () => vendorsForDropdown.map((v) => ({ id: v.id, name: v.name })),
+    [vendorsForDropdown]
+  );
+
+  const filteredDirectInvoices = useMemo(() => {
+    return directInvoices.filter((inv) => {
+      const vendorId = (inv as { vendorId?: string }).vendorId;
+      if (!inCreatedAtRange(inv.createdAt, listDateFrom, listDateTo)) return false;
+      if (!matchesVendorFilter(vendorId, listVendorId)) return false;
+      if (!matchesStatusQuickFilter(inv.status, listStatusQuick)) return false;
+      const vendorName = (masters.Vendor ?? []).find((v) => v.id === vendorId)?.name || '';
+      if (!textIncludes(inv.id, colInvId)) return false;
+      if (!textIncludes(vendorName, colInvVendor)) return false;
+      if (!textIncludes(new Date(inv.createdAt).toLocaleDateString(), colInvDate)) return false;
+      if (!textIncludes(String(inv.amount), colInvAmt)) return false;
+      if (!textIncludes(inv.status, colInvStatus)) return false;
+      return true;
+    });
+  }, [
+    directInvoices,
+    masters,
+    listDateFrom,
+    listDateTo,
+    listVendorId,
+    listStatusQuick,
+    colInvId,
+    colInvVendor,
+    colInvDate,
+    colInvAmt,
+    colInvStatus,
+  ]);
   
   // Form states
   const [invoiceForm, setInvoiceForm] = useState<any>({
@@ -380,15 +439,30 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-wrap justify-between items-center gap-3">
         <h2 className="text-xl font-black text-slate-800">Direct Invoice Management</h2>
         {!showForm && (
-          <button 
-            onClick={() => setShowForm(true)}
-            className="bg-indigo-600 text-white px-4 py-2 rounded-xl font-black shadow-lg shadow-indigo-200 hover:scale-105 transition-transform"
-          >
-            + Create Direct Invoice
-          </button>
+          <div className="flex flex-wrap items-center gap-2 justify-end">
+            <TransactionListFilterBar
+              approvedCount={diApprovedCount}
+              pendingCount={diPendingCount}
+              statusQuick={listStatusQuick}
+              onStatusQuick={setListStatusQuick}
+              dateFrom={listDateFrom}
+              dateTo={listDateTo}
+              onDateFrom={setListDateFrom}
+              onDateTo={setListDateTo}
+              vendorId={listVendorId}
+              onVendorId={setListVendorId}
+              vendors={vendorOptionsForList}
+            />
+            <button
+              onClick={() => setShowForm(true)}
+              className="bg-indigo-600 text-white px-4 py-2 rounded-xl font-black shadow-lg shadow-indigo-200 hover:scale-105 transition-transform shrink-0"
+            >
+              + Create Direct Invoice
+            </button>
+          </div>
         )}
       </div>
 
@@ -735,7 +809,71 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
         </div>
       ) : (
         <div className="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden">
-          <table className="w-full text-left border-collapse">
+          <div
+            className="grid w-full gap-0 border-b border-slate-100 bg-slate-50/80"
+            style={{
+              gridTemplateColumns: 'minmax(0, 12%) minmax(0, 22%) minmax(0, 12%) minmax(0, 12%) minmax(0, 14%) minmax(0, 28%)',
+            }}
+            role="search"
+            aria-label="Column filters"
+          >
+            <div className="px-6 py-2 min-w-0">
+              <input
+                type="text"
+                placeholder="Filter…"
+                value={colInvId}
+                onChange={(e) => setColInvId(e.target.value)}
+                className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
+              />
+            </div>
+            <div className="px-6 py-2 min-w-0">
+              <input
+                type="text"
+                placeholder="Filter…"
+                value={colInvVendor}
+                onChange={(e) => setColInvVendor(e.target.value)}
+                className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
+              />
+            </div>
+            <div className="px-6 py-2 min-w-0">
+              <input
+                type="text"
+                placeholder="Filter…"
+                value={colInvDate}
+                onChange={(e) => setColInvDate(e.target.value)}
+                className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
+              />
+            </div>
+            <div className="px-6 py-2 min-w-0">
+              <input
+                type="text"
+                placeholder="Filter…"
+                value={colInvAmt}
+                onChange={(e) => setColInvAmt(e.target.value)}
+                className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
+              />
+            </div>
+            <div className="px-6 py-2 min-w-0">
+              <input
+                type="text"
+                placeholder="Filter…"
+                value={colInvStatus}
+                onChange={(e) => setColInvStatus(e.target.value)}
+                className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
+              />
+            </div>
+            <div className="px-6 py-2 min-w-0" aria-hidden="true" />
+          </div>
+
+          <table className="w-full table-fixed text-left border-collapse">
+            <colgroup>
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '22%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '28%' }} />
+            </colgroup>
             <thead>
               <tr className="bg-slate-50 border-b border-slate-100">
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Invoice ID</th>
@@ -751,8 +889,14 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
                 <tr>
                   <td colSpan={6} className="px-6 py-12 text-center text-slate-400 font-medium italic">No direct invoices found. Create one to get started.</td>
                 </tr>
+              ) : filteredDirectInvoices.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-6 py-12 text-center text-slate-500 text-sm font-bold">
+                    No direct invoices match your filters.
+                  </td>
+                </tr>
               ) : (
-                directInvoices.map(inv => (
+                filteredDirectInvoices.map(inv => (
                   <tr key={inv.id} className="hover:bg-slate-50/50 transition-colors">
                     <td className="px-6 py-4 font-black text-slate-700">{inv.id}</td>
                     <td className="px-6 py-4 font-bold text-slate-600">{(masters.Vendor ?? []).find(v => v.id === (inv as any).vendorId)?.name || 'Unknown'}</td>

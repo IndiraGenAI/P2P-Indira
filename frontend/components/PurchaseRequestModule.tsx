@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { 
   PurchaseRequest, MasterRecord, MasterType, 
   Attachment, ItemLine, Frequency,
@@ -9,7 +9,14 @@ import { CENTERS } from '../constants';
 import { getDepartments, getSubdepartmentsForDepartment, getItemTypesFromMasters } from '../utils/mastersHelpers';
 import { getBudgetForDocumentAndCoaCode } from '../utils/budgetHelpers';
 import { filterByWorkflowApproval } from '../utils/workflowV2Filters';
+import {
+  inCreatedAtRange,
+  matchesStatusQuickFilter,
+  matchesVendorFilter,
+  textIncludes,
+} from '../utils/transactionListFilters';
 import MultiSelect from './MultiSelect';
+import TransactionListFilterBar, { ListStatusQuick } from './TransactionListFilterBar';
 import { AlertCircle, Info } from 'lucide-react';
 
 interface PurchaseRequestModuleProps {
@@ -52,6 +59,60 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
   });
 
   const [budgetExceeded, setBudgetExceeded] = useState(false);
+
+  const [listStatusQuick, setListStatusQuick] = useState<ListStatusQuick>('all');
+  const [listDateFrom, setListDateFrom] = useState('');
+  const [listDateTo, setListDateTo] = useState('');
+  const [listVendorId, setListVendorId] = useState('');
+  const [colPrId, setColPrId] = useState('');
+  const [colPrDept, setColPrDept] = useState('');
+  const [colPrVendor, setColPrVendor] = useState('');
+  const [colPrItems, setColPrItems] = useState('');
+  const [colPrAmt, setColPrAmt] = useState('');
+  const [colPrStatus, setColPrStatus] = useState('');
+
+  const prApprovedCount = useMemo(
+    () => purchaseRequests.filter((p) => p.status === 'Approved').length,
+    [purchaseRequests]
+  );
+  const prPendingCount = useMemo(
+    () => purchaseRequests.filter((p) => p.status === 'Pending').length,
+    [purchaseRequests]
+  );
+
+  const filteredPurchaseRequests = useMemo(() => {
+    return purchaseRequests.filter((pr) => {
+      if (!inCreatedAtRange(pr.createdAt, listDateFrom, listDateTo)) return false;
+      if (!matchesVendorFilter(pr.vendorId, listVendorId)) return false;
+      if (!matchesStatusQuickFilter(pr.status, listStatusQuick)) return false;
+      if (!textIncludes(pr.id, colPrId)) return false;
+      if (!textIncludes(`${pr.department} ${pr.subDepartment}`, colPrDept)) return false;
+      const vendorName = (masters['Vendor'] || []).find((v) => v.id === pr.vendorId)?.name ?? '';
+      if (!textIncludes(vendorName, colPrVendor)) return false;
+      if (!textIncludes(pr.items.map((i) => i.itemName).join(' '), colPrItems)) return false;
+      if (!textIncludes(String(pr.amount), colPrAmt)) return false;
+      if (!textIncludes(pr.status, colPrStatus)) return false;
+      return true;
+    });
+  }, [
+    purchaseRequests,
+    listDateFrom,
+    listDateTo,
+    listVendorId,
+    listStatusQuick,
+    colPrId,
+    colPrDept,
+    colPrVendor,
+    colPrItems,
+    colPrAmt,
+    colPrStatus,
+    masters,
+  ]);
+
+  const vendorOptionsForList = useMemo(
+    () => vendorsForDropdown.map((v) => ({ id: v.id, name: v.name })),
+    [vendorsForDropdown]
+  );
 
   const addItem = () => {
     setPrForm(prev => ({
@@ -262,15 +323,30 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-wrap justify-between items-center gap-3">
         <h2 className="text-xl font-black text-slate-800 tracking-tight">Purchase Request Management</h2>
         {!showForm && (
-          <button 
-            onClick={() => setShowForm(true)}
-            className="bg-indigo-600 text-white px-4 py-2 rounded-xl font-black shadow-lg shadow-indigo-200 hover:scale-105 transition-transform"
-          >
-            + Raise New PR
-          </button>
+          <div className="flex flex-wrap items-center gap-2 justify-end">
+            <TransactionListFilterBar
+              approvedCount={prApprovedCount}
+              pendingCount={prPendingCount}
+              statusQuick={listStatusQuick}
+              onStatusQuick={setListStatusQuick}
+              dateFrom={listDateFrom}
+              dateTo={listDateTo}
+              onDateFrom={setListDateFrom}
+              onDateTo={setListDateTo}
+              vendorId={listVendorId}
+              onVendorId={setListVendorId}
+              vendors={vendorOptionsForList}
+            />
+            <button
+              onClick={() => setShowForm(true)}
+              className="bg-indigo-600 text-white px-4 py-2 rounded-xl font-black shadow-lg shadow-indigo-200 hover:scale-105 transition-transform shrink-0"
+            >
+              + Raise New PR
+            </button>
+          </div>
         )}
       </div>
 
@@ -569,11 +645,87 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
         </div>
       ) : (
         <div className="bg-white rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden">
-          <table className="w-full text-left border-collapse">
+          {/* Column filters — same widths as table via shared percentages */}
+          <div
+            className="grid w-full gap-0 border-b border-slate-100 bg-slate-50/80"
+            style={{
+              gridTemplateColumns: 'minmax(0, 10%) minmax(0, 12%) minmax(0, 14%) minmax(0, 22%) minmax(0, 11%) minmax(0, 12%) minmax(0, 19%)',
+            }}
+            role="search"
+            aria-label="Column filters"
+          >
+            <div className="px-6 py-2 min-w-0">
+              <input
+                type="text"
+                placeholder="Filter…"
+                value={colPrId}
+                onChange={(e) => setColPrId(e.target.value)}
+                className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
+              />
+            </div>
+            <div className="px-6 py-2 min-w-0">
+              <input
+                type="text"
+                placeholder="Filter…"
+                value={colPrDept}
+                onChange={(e) => setColPrDept(e.target.value)}
+                className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
+              />
+            </div>
+            <div className="px-6 py-2 min-w-0">
+              <input
+                type="text"
+                placeholder="Filter…"
+                value={colPrVendor}
+                onChange={(e) => setColPrVendor(e.target.value)}
+                className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
+              />
+            </div>
+            <div className="px-6 py-2 min-w-0">
+              <input
+                type="text"
+                placeholder="Filter…"
+                value={colPrItems}
+                onChange={(e) => setColPrItems(e.target.value)}
+                className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
+              />
+            </div>
+            <div className="px-6 py-2 min-w-0">
+              <input
+                type="text"
+                placeholder="Filter…"
+                value={colPrAmt}
+                onChange={(e) => setColPrAmt(e.target.value)}
+                className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
+              />
+            </div>
+            <div className="px-6 py-2 min-w-0">
+              <input
+                type="text"
+                placeholder="Filter…"
+                value={colPrStatus}
+                onChange={(e) => setColPrStatus(e.target.value)}
+                className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
+              />
+            </div>
+            <div className="px-6 py-2 min-w-0" aria-hidden="true" />
+          </div>
+
+          <table className="w-full table-fixed text-left border-collapse">
+            <colgroup>
+              <col style={{ width: '10%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '22%' }} />
+              <col style={{ width: '11%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '19%' }} />
+            </colgroup>
             <thead>
               <tr className="bg-slate-50/50 border-b border-slate-100">
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">PR ID</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Dept</th>
+                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Vendor</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Items</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Net Amount</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Status</th>
@@ -581,7 +733,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {purchaseRequests.map(pr => (
+              {filteredPurchaseRequests.map(pr => (
                 <tr key={pr.id} className="hover:bg-slate-50/50 transition-colors group">
                   <td className="px-6 py-4">
                     <span className="text-sm font-black text-slate-900">{pr.id}</span>
@@ -589,6 +741,11 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
                   </td>
                   <td className="px-6 py-4">
                     <div className="text-xs text-slate-400 font-medium">{pr.department} - {pr.subDepartment}</div>
+                  </td>
+                  <td className="px-6 py-4 min-w-0">
+                    <div className="text-sm font-bold text-slate-700 truncate" title={(masters['Vendor'] || []).find((v) => v.id === pr.vendorId)?.name}>
+                      {(masters['Vendor'] || []).find((v) => v.id === pr.vendorId)?.name ?? '—'}
+                    </div>
                   </td>
                   <td className="px-6 py-4">
                     <div className="text-sm font-bold text-slate-700">{pr.items.length} Items</div>
@@ -657,12 +814,19 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
               ))}
               {purchaseRequests.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center">
+                  <td colSpan={7} className="px-6 py-12 text-center">
                     <div className="flex flex-col items-center justify-center text-slate-400">
                       <svg className="w-12 h-12 mb-4 opacity-20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
                       <p className="text-sm font-bold">No purchase requests found.</p>
                       <p className="text-xs">Raise a new PR to get started.</p>
                     </div>
+                  </td>
+                </tr>
+              )}
+              {purchaseRequests.length > 0 && filteredPurchaseRequests.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-6 py-12 text-center text-slate-500 text-sm font-bold">
+                    No purchase requests match your filters.
                   </td>
                 </tr>
               )}

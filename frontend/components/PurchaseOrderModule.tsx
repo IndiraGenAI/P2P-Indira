@@ -1,17 +1,28 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Papa from 'papaparse';
 import { 
   PurchaseOrder, GRN, Invoice, MasterRecord, MasterType, 
   Frequency, Attachment, ItemLine, PurchaseRequest,
-  User, WorkflowRule, Budget, BudgetType, BudgetControlType, ModuleType, ApprovalType, WorkflowV2Rule
+  User, WorkflowRule, Budget, BudgetType, BudgetControlType, ModuleType, ApprovalType, WorkflowV2Rule, RateContract
 } from '../types';
 import { CENTERS } from '../constants';
 import { getDepartments, getSubdepartmentsForDepartment, getItemTypesFromMasters } from '../utils/mastersHelpers';
 import { getBudgetForDocumentAndCoaCode } from '../utils/budgetHelpers';
 import { filterByWorkflowApproval } from '../utils/workflowV2Filters';
-import MultiSelect from './MultiSelect';
+import {
+  getGrnVendorId,
+  getPoInvoiceVendorId,
+  inCreatedAtRange,
+  matchesStatusQuickFilter,
+  matchesVendorFilter,
+  textIncludes,
+} from '../utils/transactionListFilters';
+import TransactionListFilterBar, { ListStatusQuick } from './TransactionListFilterBar';
+import SearchableSelect from './SearchableSelect';
 import { AlertCircle, Info, ShieldCheck, ShieldAlert } from 'lucide-react';
+
+const PO_LINE_GST_USE_HEADER = '__HEADER__' as const;
 
 interface PurchaseOrderModuleProps {
   masters: Record<MasterType, MasterRecord[]>;
@@ -37,7 +48,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
 }) => {
   const vendorsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Vendor', masters.Vendor ?? []) as MasterRecord[];
   const itemsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Item', masters.Item ?? []) as MasterRecord[];
-  const budgetsForDeduction = filterByWorkflowApproval(workflowV2Rules, 'Budget', budgets);
+  const budgetsForDeduction = filterByWorkflowApproval<Budget>(workflowV2Rules, 'Budget', budgets);
   const [viewMode, setViewMode] = useState<ViewMode>('PO');
   
   const [showForm, setShowForm] = useState(false);
@@ -45,6 +56,38 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
   const [selectedGRN, setSelectedGRN] = useState<GRN | null>(null);
 
   const [bulkUploadType, setBulkUploadType] = useState<'PO' | 'GRN' | 'Invoice' | null>(null);
+
+  const [listStatusQuick, setListStatusQuick] = useState<ListStatusQuick>('all');
+  const [listDateFrom, setListDateFrom] = useState('');
+  const [listDateTo, setListDateTo] = useState('');
+  const [listVendorId, setListVendorId] = useState('');
+  const [colPoId, setColPoId] = useState('');
+  const [colPoDetails, setColPoDetails] = useState('');
+  const [colPoReq, setColPoReq] = useState('');
+  const [colPoStatus, setColPoStatus] = useState('');
+  const [colGrnId, setColGrnId] = useState('');
+  const [colGrnDetails, setColGrnDetails] = useState('');
+  const [colGrnStatus, setColGrnStatus] = useState('');
+  const [colInvId, setColInvId] = useState('');
+  const [colInvDetails, setColInvDetails] = useState('');
+  const [colInvStatus, setColInvStatus] = useState('');
+
+  useEffect(() => {
+    setListStatusQuick('all');
+    setListDateFrom('');
+    setListDateTo('');
+    setListVendorId('');
+    setColPoId('');
+    setColPoDetails('');
+    setColPoReq('');
+    setColPoStatus('');
+    setColGrnId('');
+    setColGrnDetails('');
+    setColGrnStatus('');
+    setColInvId('');
+    setColInvDetails('');
+    setColInvStatus('');
+  }, [viewMode]);
 
   // Form states
   const [poForm, setPoForm] = useState<Partial<PurchaseOrder>>({
@@ -59,7 +102,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     subDepartment: '',
     paymentTerms: '',
     centerNames: [],
-    items: [{ id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, remarks: '' }],
+    items: [{ id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, remarks: '', centerName: '' }],
     tds: 0,
     gst: 0,
     amount: 0,
@@ -90,6 +133,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
         items: pendingPR.items.map(item => ({
           ...item,
           id: Math.random().toString(), // New IDs for PO items
+          centerName: item.centerName || pendingPR.centerNames?.[0] || '',
         })),
         remarks: `Created from ${pendingPR.id}: ${pendingPR.remarks}`,
         amount: pendingPR.amount,
@@ -164,6 +208,12 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     });
   }, [grnForm.tds, grnForm.gst, grnForm.location, selectedPO?.id, selectedGRN]);
 
+  /** Per-line centre names only — avoids re-running PO tax recalc on every qty/rate edit */
+  const poLineCentersSignature = useMemo(
+    () => (poForm.items || []).map((i) => `${i.id}:${i.centerName ?? ''}`).join('|'),
+    [poForm.items]
+  );
+
   const updateGrnItem = (itemId: string, field: 'quantity' | 'remarks' | 'gst', value: number | string) => {
     if (!selectedPO) return;
     const vendor = (masters.Vendor ?? []).find((v: any) => v.id === selectedPO.vendorId);
@@ -219,30 +269,36 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     });
   };
 
-  // Recalculate all items when top-level TDS or GST changes (preserve per-line GST)
+  // Recalculate all items when GST changes. PO lines have no TDS (always 0). Line `gst` undefined = follow header; explicit line gst preserved. CGST/SGST/IGST use each line's centre.
   useEffect(() => {
     setPoForm(prev => {
       const vendor = (masters.Vendor ?? []).find(v => v.id === prev.vendorId);
-      const center = (masters.Center ?? []).find(c => c.name === prev.centerNames?.[0]);
-      const isIntraState = vendor && center && vendor.state === center.state;
-      const tdsPercent = prev.tds || 0;
+      const tdsPercent = 0;
+      const headerGst = Number(prev.gst) || 0;
 
       const updatedItems = (prev.items || []).map(item => {
+        const centerRow = (masters.Center ?? []).find((c: any) => c.name === item.centerName);
+        const isIntraState = !!(vendor && centerRow && (vendor as any).state === (centerRow as any).state);
         const qty = item.quantity || 0;
         const rate = item.rate || 0;
         const baseAmount = qty * rate;
-        const tdsAmount = baseAmount * (tdsPercent / 100);
-        const gstPercent = item.gst ?? prev.gst ?? 0;
+        const tdsAmount = 0;
+        const gstPercent =
+          item.gst !== undefined && item.gst !== null ? Number(item.gst) : headerGst;
         const gstAmount = baseAmount * (gstPercent / 100);
 
-        const updated = {
+        const updated: ItemLine = {
           ...item,
           amount: baseAmount,
           tds: tdsPercent,
-          gst: gstPercent,
           tdsAmount,
-          gstAmount
+          gstAmount,
         };
+        if (item.gst !== undefined && item.gst !== null) {
+          updated.gst = item.gst;
+        } else {
+          delete (updated as any).gst;
+        }
 
         if (isIntraState) {
           updated.cgst = gstAmount / 2;
@@ -260,12 +316,15 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
 
       return { ...prev, items: updatedItems };
     });
-  }, [poForm.tds, poForm.gst, poForm.vendorId, poForm.centerNames]);
+  }, [poForm.gst, poForm.vendorId, poLineCentersSignature, masters]);
 
   const addItem = () => {
     setPoForm(prev => ({
       ...prev,
-      items: [...(prev.items || []), { id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, tds: 0, gst: 0, remarks: '', coaCode: '' }]
+      items: [
+        ...(prev.items || []),
+        { id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, remarks: '', coaCode: '', centerName: '' },
+      ],
     }));
   };
 
@@ -279,9 +338,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
   const updateItem = (id: string, field: keyof ItemLine, value: any) => {
     setPoForm(prev => {
       const vendor = (masters.Vendor ?? []).find(v => v.id === prev.vendorId);
-      const center = (masters.Center ?? []).find(c => c.name === prev.centerNames?.[0]);
-      const isIntraState = vendor && center && vendor.state === center.state;
-      const tdsPercent = prev.tds || 0;
+      const tdsPercent = 0;
 
       return {
         ...prev,
@@ -297,13 +354,26 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                 updated.coaCode = '';
               }
             }
-            if (field === 'quantity' || field === 'rate' || field === 'tds' || field === 'gst') {
+            const lineCenterName =
+              field === 'centerName' ? String(value ?? '') : (updated.centerName ?? item.centerName ?? '');
+            const centerRow = (masters.Center ?? []).find((c: any) => c.name === lineCenterName);
+            const isIntraState = !!(vendor && centerRow && (vendor as any).state === (centerRow as any).state);
+
+            if (field === 'quantity' || field === 'rate' || field === 'gst' || field === 'centerName') {
+              if (field === 'gst') {
+                if (value === PO_LINE_GST_USE_HEADER || value === '' || value === undefined || value === null) {
+                  delete (updated as any).gst;
+                } else {
+                  updated.gst = Number(value);
+                }
+              }
               const qty = updated.quantity || 0;
               const rate = updated.rate || 0;
               const baseAmount = qty * rate;
-              const tdsAmount = baseAmount * (tdsPercent / 100);
-              const gstPercent = (field === 'gst' ? Number(value) : (updated.gst ?? prev.gst)) || 0;
-              updated.gst = gstPercent;
+              const tdsAmount = 0;
+              const headerGst = Number(prev.gst) || 0;
+              const gstPercent =
+                updated.gst !== undefined && updated.gst !== null ? Number(updated.gst) : headerGst;
               const gstAmount = baseAmount * (gstPercent / 100);
 
               updated.amount = baseAmount;
@@ -346,6 +416,22 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     setPoForm(prev => ({ ...prev, amount: total }));
   }, [poForm.items]);
 
+  // Keep PO-level centerNames as union of line centres (workflow / list still use po.centerNames)
+  useEffect(() => {
+    const derived = [...new Set((poForm.items || []).map((i) => i.centerName).filter(Boolean))] as string[];
+    setPoForm((prev) => {
+      const cur = prev.centerNames || [];
+      if (
+        derived.length === cur.length &&
+        derived.every((c) => cur.includes(c)) &&
+        cur.every((c) => derived.includes(c))
+      ) {
+        return prev;
+      }
+      return { ...prev, centerNames: derived };
+    });
+  }, [poForm.items]);
+
   const updateInvoiceItem = (itemId: string, field: 'quantity' | 'gst' | 'tds', value: number) => {
     if (!selectedGRN || !selectedPO) return;
     const vendor = (masters.Vendor ?? []).find((v: any) => v.id === selectedPO.vendorId);
@@ -381,7 +467,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
   };
 
   const downloadTemplate = (type: 'PO' | 'GRN' | 'Invoice') => {
-    const headers = 'Item Name,Qty,Rate,Remarks';
+    const headers = type === 'PO' ? 'Item Name,Qty,Rate,Center,Remarks' : 'Item Name,Qty,Rate,Remarks';
     const blob = new Blob([headers], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -406,9 +492,10 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
           const itemName = row['Item Name'] || row['itemName'] || '';
           const qty = parseFloat(row['Qty'] || row['quantity'] || '0');
           const rate = parseFloat(row['Rate'] || row['rate'] || '0');
+          const centerName = row['Center'] || row['center'] || row['Centre'] || '';
           
           const base = qty * rate;
-          const tdsPercent = poForm.tds || 0;
+          const tdsPercent = type === 'PO' ? 0 : (poForm.tds || 0);
           const gstPercent = poForm.gst || 0;
           const tdsAmount = base * (tdsPercent / 100);
           const gstAmount = base * (gstPercent / 100);
@@ -424,7 +511,8 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
             tdsAmount,
             gstAmount,
             totalAmount: base + gstAmount - tdsAmount,
-            remarks: row['Remarks'] || row['remarks'] || ''
+            remarks: row['Remarks'] || row['remarks'] || '',
+            centerName: String(centerName || ''),
           };
         });
 
@@ -453,8 +541,12 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
 
   const handleCreatePO = () => {
     // Validation
-    if (!poForm.vendorId || !poForm.department || !poForm.subDepartment || (poForm.centerNames || []).length === 0) {
+    if (!poForm.vendorId || !poForm.department || !poForm.subDepartment) {
       alert('Please fill all mandatory header fields.');
+      return;
+    }
+    if ((poForm.items || []).some((i) => !String(i.centerName || '').trim())) {
+      alert('Centre is mandatory for every item line.');
       return;
     }
     if ((poForm.items || []).some(i => !i.itemName || !i.remarks)) {
@@ -473,8 +565,18 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       return;
     }
 
+    const centerNamesFromLines = [
+      ...new Set((poForm.items || []).map((i) => i.centerName).filter(Boolean)),
+    ] as string[];
+    const headerGstNum = Number(poForm.gst) || 0;
+    const itemsForSave = (poForm.items || []).map((i) => ({
+      ...i,
+      gst: i.gst !== undefined && i.gst !== null ? i.gst : headerGstNum,
+    }));
     const newPO: PurchaseOrder = {
-      ...poForm as PurchaseOrder,
+      ...(poForm as PurchaseOrder),
+      items: itemsForSave,
+      centerNames: centerNamesFromLines,
       id: `PO-${Math.floor(Math.random() * 10000)}`,
       status: budgetCheck.ok ? 'Pending' : 'Budget Hold',
       currentStepIndex: 0,
@@ -564,7 +666,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       entityName: masters.Entity?.[0]?.name || '',
       vendorId: '', vendorSiteId: '', transactionType: getItemTypesFromMasters(masters)[0]?.name ?? '', validFrom: '', validTo: '',
       frequency: 'One-Time', department: '', subDepartment: '', paymentTerms: '',
-      centerNames: [], items: [{ id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, remarks: '', coaCode: '' }],
+      centerNames: [], items: [{ id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, remarks: '', coaCode: '', centerName: '' }], // line gst omitted = follow header
       tds: 0, gst: 0, amount: 0, remarks: '', attachments: [],
       shippingAddressId: '', billingAddressId: '',
       isUnbudgeted: false, unbudgetedJustification: ''
@@ -576,6 +678,78 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
   };
 
   const poGrns = grns.filter(g => g.purchaseOrderId);
+  const noRateContracts: RateContract[] = [];
+
+  const vendorOptionsForList = useMemo(
+    () => vendorsForDropdown.map((v) => ({ id: v.id, name: v.name })),
+    [vendorsForDropdown]
+  );
+
+  const poListCounts = useMemo(
+    () => ({
+      approved: purchaseOrders.filter((p) => p.status === 'Approved').length,
+      pending: purchaseOrders.filter((p) => p.status === 'Pending').length,
+    }),
+    [purchaseOrders]
+  );
+  const grnListCounts = useMemo(
+    () => ({
+      approved: poGrns.filter((g) => g.status === 'Approved').length,
+      pending: poGrns.filter((g) => g.status === 'Pending').length,
+    }),
+    [poGrns]
+  );
+  const invListCounts = useMemo(
+    () => ({
+      approved: invoices.filter((i) => i.status === 'Approved').length,
+      pending: invoices.filter((i) => i.status === 'Pending').length,
+    }),
+    [invoices]
+  );
+
+  const filteredPurchaseOrders = useMemo(() => {
+    return purchaseOrders.filter((po) => {
+      if (!inCreatedAtRange(po.createdAt, listDateFrom, listDateTo)) return false;
+      if (!matchesVendorFilter(po.vendorId, listVendorId)) return false;
+      if (!matchesStatusQuickFilter(po.status, listStatusQuick)) return false;
+      const vendorName = (masters.Vendor ?? []).find((v) => v.id === po.vendorId)?.name || '';
+      const details = `${vendorName} ${po.items.length} ${po.centerNames.length} ${(Number(po.amount) || 0).toFixed(2)}`;
+      if (!textIncludes(po.id, colPoId)) return false;
+      if (!textIncludes(details, colPoDetails)) return false;
+      if (!textIncludes(po.requiredDate || 'N/A', colPoReq)) return false;
+      if (!textIncludes(po.status, colPoStatus)) return false;
+      return true;
+    });
+  }, [purchaseOrders, masters, listDateFrom, listDateTo, listVendorId, listStatusQuick, colPoId, colPoDetails, colPoReq, colPoStatus]);
+
+  const filteredPoGrns = useMemo(() => {
+    return poGrns.filter((grn) => {
+      if (!inCreatedAtRange(grn.createdAt, listDateFrom, listDateTo)) return false;
+      const vid = getGrnVendorId(grn, noRateContracts, purchaseOrders, masters);
+      if (!matchesVendorFilter(vid, listVendorId)) return false;
+      if (!matchesStatusQuickFilter(grn.status, listStatusQuick)) return false;
+      const details = `${grn.location} ${grn.purchaseOrderId || ''} ${grn.invoiceNumber || ''} ${grn.items.length} ${(Number(grn.amount) || 0).toFixed(2)}`;
+      if (!textIncludes(grn.id, colGrnId)) return false;
+      if (!textIncludes(details, colGrnDetails)) return false;
+      if (!textIncludes(grn.status, colGrnStatus)) return false;
+      return true;
+    });
+  }, [poGrns, purchaseOrders, masters, listDateFrom, listDateTo, listVendorId, listStatusQuick, colGrnId, colGrnDetails, colGrnStatus]);
+
+  const filteredPoInvoices = useMemo(() => {
+    return invoices.filter((inv) => {
+      if (!inCreatedAtRange(inv.createdAt, listDateFrom, listDateTo)) return false;
+      const vid = getPoInvoiceVendorId(inv, grns, noRateContracts, purchaseOrders, masters);
+      if (!matchesVendorFilter(vid, listVendorId)) return false;
+      if (!matchesStatusQuickFilter(inv.status, listStatusQuick)) return false;
+      const details = `${inv.location} ${inv.grnId || ''} ${(Number(inv.amount) || 0).toFixed(2)}`;
+      if (!textIncludes(inv.id, colInvId)) return false;
+      if (!textIncludes(details, colInvDetails)) return false;
+      if (!textIncludes(inv.status, colInvStatus)) return false;
+      return true;
+    });
+  }, [invoices, grns, purchaseOrders, masters, listDateFrom, listDateTo, listVendorId, listStatusQuick, colInvId, colInvDetails, colInvStatus]);
+
   const isGrnReadOnly = !!grnForm.id && !(grnForm.status === 'Rejected' && grnForm.createdBy === currentUser.id);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, source: Attachment['source']) => {
@@ -812,19 +986,104 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
 
   return (
     <div className="space-y-6">
-      <div className="flex space-x-4 border-b border-slate-200 pb-4">
-        {(['PO', 'GRN', 'Invoice'] as ViewMode[]).map(mode => (
-          <button
-            key={mode}
-            onClick={() => { setViewMode(mode); setShowForm(false); }}
-            className={`px-4 py-2 rounded-lg font-bold transition-all ${
-              viewMode === mode ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100'
-            }`}
-          >
-            {mode === 'PO' ? 'Purchase Orders' : mode === 'GRN' ? 'GRN' : 'Invoices'}
-          </button>
-        ))}
+      <div className="flex flex-wrap justify-between items-center gap-3 border-b border-slate-200 pb-4">
+        <div className="flex flex-wrap gap-2">
+          {(['PO', 'GRN', 'Invoice'] as ViewMode[]).map(mode => (
+            <button
+              key={mode}
+              onClick={() => { setViewMode(mode); setShowForm(false); }}
+              className={`px-4 py-2 rounded-lg font-bold transition-all ${
+                viewMode === mode ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100'
+              }`}
+            >
+              {mode === 'PO' ? 'Purchase Orders' : mode === 'GRN' ? 'GRN' : 'Invoices'}
+            </button>
+          ))}
+        </div>
+        {!showForm && (
+          <TransactionListFilterBar
+            approvedCount={viewMode === 'PO' ? poListCounts.approved : viewMode === 'GRN' ? grnListCounts.approved : invListCounts.approved}
+            pendingCount={viewMode === 'PO' ? poListCounts.pending : viewMode === 'GRN' ? grnListCounts.pending : invListCounts.pending}
+            statusQuick={listStatusQuick}
+            onStatusQuick={setListStatusQuick}
+            dateFrom={listDateFrom}
+            dateTo={listDateTo}
+            onDateFrom={setListDateFrom}
+            onDateTo={setListDateTo}
+            vendorId={listVendorId}
+            onVendorId={setListVendorId}
+            vendors={vendorOptionsForList}
+          />
+        )}
       </div>
+
+      {!showForm && (
+        <div
+          className="grid w-full gap-0 border-b border-slate-100 bg-slate-50/80"
+          style={{
+            gridTemplateColumns: 'minmax(0, 14%) minmax(0, 28%) minmax(0, 14%) minmax(0, 14%) minmax(0, 30%)',
+          }}
+          role="search"
+          aria-label="Column filters"
+        >
+          <div className="px-6 py-2 min-w-0">
+            <input
+              type="text"
+              placeholder="Filter…"
+              value={viewMode === 'PO' ? colPoId : viewMode === 'GRN' ? colGrnId : colInvId}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (viewMode === 'PO') setColPoId(v);
+                else if (viewMode === 'GRN') setColGrnId(v);
+                else setColInvId(v);
+              }}
+              className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
+            />
+          </div>
+          <div className="px-6 py-2 min-w-0">
+            <input
+              type="text"
+              placeholder="Filter…"
+              value={viewMode === 'PO' ? colPoDetails : viewMode === 'GRN' ? colGrnDetails : colInvDetails}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (viewMode === 'PO') setColPoDetails(v);
+                else if (viewMode === 'GRN') setColGrnDetails(v);
+                else setColInvDetails(v);
+              }}
+              className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
+            />
+          </div>
+          <div className="px-6 py-2 min-w-0">
+            {viewMode === 'PO' ? (
+              <input
+                type="text"
+                placeholder="Filter…"
+                value={colPoReq}
+                onChange={(e) => setColPoReq(e.target.value)}
+                className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
+              />
+            ) : (
+              <span className="text-[10px] text-slate-400 font-bold block py-1">—</span>
+            )}
+          </div>
+          <div className="px-6 py-2 min-w-0">
+            <input
+              type="text"
+              placeholder="Filter…"
+              value={viewMode === 'PO' ? colPoStatus : viewMode === 'GRN' ? colGrnStatus : colInvStatus}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (viewMode === 'PO') setColPoStatus(v);
+                else if (viewMode === 'GRN') setColGrnStatus(v);
+                else setColInvStatus(v);
+              }}
+              className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
+            />
+          </div>
+          <div className="px-6 py-2 min-w-0" aria-hidden="true" />
+        </div>
+      )}
 
       <div className="flex justify-between items-center">
         <h2 className="text-xl font-black text-slate-800">
@@ -914,17 +1173,6 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                     {(masters.Entity ?? []).flatMap(ent => ent.billingAddresses || []).map((addr: any) => (
                       <option key={addr.id} value={addr.id}>{addr.address}</option>
                     ))}
-                  </select>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-xs font-black text-slate-500 uppercase tracking-wider">TDS %</label>
-                  <select 
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
-                    value={poForm.tds}
-                    onChange={e => setPoForm({ ...poForm, tds: Number(e.target.value) })}
-                  >
-                    <option value="0">Select TDS</option>
-                    {(masters.TDS ?? []).map(t => <option key={t.id} value={t.rate}>{t.name}</option>)}
                   </select>
                 </div>
                 <div className="space-y-2">
@@ -1086,15 +1334,6 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                     </div>
                   )}
                 </div>
-                <div className="space-y-2 md:col-span-2">
-                  <MultiSelect 
-                    label="Centers"
-                    options={CENTERS}
-                    selected={poForm.centerNames || []}
-                    onChange={centers => setPoForm({ ...poForm, centerNames: centers })}
-                  />
-                </div>
-                
                 {/* Items Section */}
                 <div className="col-span-2 space-y-4">
                   <div className="flex justify-between items-center">
@@ -1125,15 +1364,13 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                       <div key={item.id} className="bg-slate-50 p-6 rounded-3xl border border-slate-100 space-y-4">
                         <div className="grid grid-cols-12 gap-2 items-end">
                           <div className="col-span-2 space-y-1 min-w-0">
-                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Item Name</label>
-                            <select 
-                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
-                              value={item.itemName}
-                              onChange={e => updateItem(item.id, 'itemName', e.target.value)}
-                            >
-                              <option value="">Select Item</option>
-                              {itemsForDropdown.filter(i => !poForm.items?.some(selected => selected.id !== item.id && selected.itemName === i.name)).map(i => <option key={i.id} value={i.name}>{i.name}</option>)}
-                            </select>
+                            <SearchableSelect
+                              label="Item Name"
+                              options={itemsForDropdown.map((i) => ({ id: i.id, name: i.name }))}
+                              value={item.itemName ?? ''}
+                              onChange={(v) => updateItem(item.id, 'itemName', v)}
+                              placeholder="Select Item"
+                            />
                           </div>
                           <div className="col-span-1 space-y-1">
                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">GL Code</label>
@@ -1141,9 +1378,22 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                               type="text"
                               readOnly
                               className="w-full bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 text-sm font-bold text-slate-600 cursor-not-allowed"
-                              value={item.coaCode ? `${item.coaCode}` : 'Select item'}
+                              value={item.coaCode ? `${item.coaCode}` : 'Select'}
                               title={item.coaCode ? 'Locked from Masters → Item → COA Mapping' : 'Select an item to see mapped GL code'}
                             />
+                          </div>
+                          <div className="col-span-1 space-y-1 min-w-0">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Centre <span className="text-red-500">*</span></label>
+                            <select
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                              value={item.centerName ?? ''}
+                              onChange={e => updateItem(item.id, 'centerName', e.target.value)}
+                            >
+                              <option value="">Select</option>
+                              {CENTERS.map((c) => (
+                                <option key={c} value={c}>{c}</option>
+                              ))}
+                            </select>
                           </div>
                           <div className="col-span-1 space-y-1">
                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Qty</label>
@@ -1173,12 +1423,27 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">GST</label>
                             <select 
                               className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
-                              value={item.gst ?? ''}
-                              onChange={e => updateItem(item.id, 'gst', Number(e.target.value))}
+                              value={
+                                item.gst !== undefined && item.gst !== null
+                                  ? String(item.gst)
+                                  : PO_LINE_GST_USE_HEADER
+                              }
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                if (v === PO_LINE_GST_USE_HEADER) {
+                                  updateItem(item.id, 'gst', PO_LINE_GST_USE_HEADER);
+                                } else {
+                                  updateItem(item.id, 'gst', Number(v));
+                                }
+                              }}
                             >
-                              <option value="">Select GST</option>
-                              {(masters.GST ?? []).map(g => (
-                                <option key={g.id} value={g.rate}>{g.name}</option>
+                              <option value={PO_LINE_GST_USE_HEADER}>
+                                {Number(poForm.gst)
+                                  ? `GST`
+                                  : 'GST'}
+                              </option>
+                              {(masters.GST ?? []).map((g) => (
+                                <option key={g.id} value={String(g.rate)}>{g.name}</option>
                               ))}
                             </select>
                           </div>
@@ -1194,7 +1459,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                               {Number(item.totalAmount ?? item.amount ?? 0).toFixed(2)}
                             </div>
                           </div>
-                          <div className="col-span-2 space-y-1 min-w-0">
+                          <div className="col-span-1 space-y-1 min-w-0">
                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Remarks <span className="text-red-500">*</span></label>
                             <input 
                               type="text"
@@ -1219,17 +1484,11 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                   {/* Consolidated Summary Section */}
                   <div className="bg-slate-50 p-6 rounded-3xl border border-slate-200 mt-6 space-y-4">
                     <h4 className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] border-b border-slate-200 pb-2">Tax & Amount Summary (INR)</h4>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
                       <div className="space-y-1">
                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Base Amount</label>
                         <div className="text-sm font-bold text-slate-700">
                           ₹{(poForm.items || []).reduce((sum, i) => sum + (i.amount || 0), 0).toFixed(2)}
-                        </div>
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total TDS Amount</label>
-                        <div className="text-sm font-bold text-red-500">
-                          -₹{(poForm.items || []).reduce((sum, i) => sum + (i.tdsAmount || 0), 0).toFixed(2)}
                         </div>
                       </div>
                       <div className="space-y-1">
@@ -1768,18 +2027,25 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
         </div>
       ) : (
         <div className="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden">
-          <table className="w-full text-left border-collapse">
+          <table className="w-full table-fixed text-left border-collapse">
+            <colgroup>
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '28%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '30%' }} />
+            </colgroup>
             <thead>
               <tr className="bg-slate-50/50 border-b border-slate-100">
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">ID / Date</th>
-                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Details</th>
+                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Vendor Name</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Required Date</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Status</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {viewMode === 'PO' && purchaseOrders.map(po => (
+              {viewMode === 'PO' && filteredPurchaseOrders.map(po => (
                 <tr key={po.id} className="hover:bg-slate-50/50 transition-colors">
                   <td className="px-6 py-4">
                     <div className="text-sm font-black text-slate-900">{po.id}</div>
@@ -1896,7 +2162,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                 </tr>
               ))}
 
-              {viewMode === 'GRN' && poGrns.map(grn => {
+              {viewMode === 'GRN' && filteredPoGrns.map(grn => {
                 const po = purchaseOrders.find(p => p.id === grn.purchaseOrderId);
                 return (
                   <tr key={grn.id} className="hover:bg-slate-50/50 transition-colors">
@@ -1966,7 +2232,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                 );
               })}
 
-              {viewMode === 'Invoice' && invoices.map(inv => (
+              {viewMode === 'Invoice' && filteredPoInvoices.map(inv => (
                 <tr key={inv.id} className="hover:bg-slate-50/50 transition-colors">
                   <td className="px-6 py-4">
                     <div className="text-sm font-black text-slate-900">{inv.id}</div>
@@ -2011,12 +2277,33 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                 </tr>
               ))}
 
-              {((viewMode === 'PO' && purchaseOrders.length === 0) || 
-                (viewMode === 'GRN' && poGrns.length === 0) || 
+              {((viewMode === 'PO' && purchaseOrders.length === 0) ||
+                (viewMode === 'GRN' && poGrns.length === 0) ||
                 (viewMode === 'Invoice' && invoices.length === 0)) && (
                 <tr>
-                  <td colSpan={4} className="px-6 py-12 text-center text-slate-400 font-medium">
+                  <td colSpan={5} className="px-6 py-12 text-center text-slate-400 font-medium">
                     No records found for {viewMode}
+                  </td>
+                </tr>
+              )}
+              {viewMode === 'PO' && purchaseOrders.length > 0 && filteredPurchaseOrders.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-6 py-12 text-center text-slate-500 text-sm font-bold">
+                    No records match your filters.
+                  </td>
+                </tr>
+              )}
+              {viewMode === 'GRN' && poGrns.length > 0 && filteredPoGrns.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-6 py-12 text-center text-slate-500 text-sm font-bold">
+                    No records match your filters.
+                  </td>
+                </tr>
+              )}
+              {viewMode === 'Invoice' && invoices.length > 0 && filteredPoInvoices.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="px-6 py-12 text-center text-slate-500 text-sm font-bold">
+                    No records match your filters.
                   </td>
                 </tr>
               )}

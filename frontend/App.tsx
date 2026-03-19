@@ -485,7 +485,7 @@ const App: React.FC = () => {
   const showSessionWarning = sessionRemaining !== null && sessionRemaining <= 120 && sessionRemaining > 0;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-slate-50 font-sans text-slate-900">
+    <div className="flex h-screen min-h-0 overflow-hidden bg-slate-50 font-sans text-slate-900">
       <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} currentUser={currentUser} roles={roles} onLogout={handleLogout} pendingItemCount={pendingItemCount} pendingVendorCount={pendingVendorCount} pendingBudgetCount={pendingBudgetCount} />
       <main className="flex-1 overflow-y-auto p-8 relative">
         {showSessionWarning && (

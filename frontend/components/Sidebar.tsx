@@ -116,17 +116,20 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
   });
 
   return (
-    <aside className="w-64 bg-slate-900 text-white h-full flex flex-col shadow-xl flex-shrink-0">
-      <div className="p-6">
-        <div className="flex items-center space-x-3 mb-8">
-          <div className="bg-indigo-600 p-2 rounded-lg">
-            <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-          </div>
-          <span className="text-xl font-bold tracking-tight">P2P Admin</span>
+    <aside className="flex h-full min-h-0 w-64 flex-shrink-0 flex-col bg-slate-900 text-white shadow-xl">
+      <div className="flex flex-shrink-0 items-center space-x-3 p-6 pb-4">
+        <div className="bg-indigo-600 p-2 rounded-lg">
+          <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+          </svg>
         </div>
-        <nav className="space-y-1">
+        <span className="text-xl font-bold tracking-tight">P2P Admin</span>
+      </div>
+
+      <div
+        className="min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-6 py-2 [scrollbar-width:thin] [scrollbar-color:rgb(71_85_105)_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-slate-600 hover:[&::-webkit-scrollbar-thumb]:bg-slate-500"
+      >
+        <nav className="space-y-1" aria-label="Main navigation">
           {filteredMenuItems.map((item) => (
             <button
               key={item.id}
@@ -152,7 +155,8 @@ const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, currentUser,
           ))}
         </nav>
       </div>
-      <div className="mt-auto p-6 border-t border-slate-800 space-y-4">
+
+      <div className="flex flex-shrink-0 flex-col space-y-4 border-t border-slate-800 p-6 pt-4">
         <button 
           onClick={onLogout} 
           className="w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-slate-400 hover:bg-red-900/20 hover:text-red-400 transition-all duration-200"

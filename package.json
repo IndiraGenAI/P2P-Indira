@@ -6,5 +6,8 @@
   "scripts": {
     "start": "cd backend && npm start",
     "dev": "cd frontend && npm run dev"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
   }
 }

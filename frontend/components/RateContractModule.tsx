@@ -1,15 +1,24 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Papa from 'papaparse';
 import { 
   RateContract, GRN, Invoice, MasterRecord, MasterType, 
   Frequency, Attachment, ItemLine,
-  User, WorkflowRule, ModuleType, ApprovalType, WorkflowV2Rule
+  User, WorkflowRule, ModuleType, ApprovalType, WorkflowV2Rule, PurchaseOrder
 } from '../types';
 import { CENTERS } from '../constants';
 import { getDepartments, getSubdepartmentsForDepartment, getItemTypesFromMasters } from '../utils/mastersHelpers';
 import { filterByWorkflowApproval } from '../utils/workflowV2Filters';
+import {
+  getGrnVendorId,
+  getRcInvoiceVendorId,
+  inCreatedAtRange,
+  matchesStatusQuickFilter,
+  matchesVendorFilter,
+  textIncludes,
+} from '../utils/transactionListFilters';
 import MultiSelect from './MultiSelect';
+import TransactionListFilterBar, { ListStatusQuick } from './TransactionListFilterBar';
 import SearchableSelect from './SearchableSelect';
 
 interface RateContractModuleProps {
@@ -87,6 +96,36 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
   });
 
   const [bulkUploadType, setBulkUploadType] = useState<'RC' | 'GRN' | 'Invoice' | null>(null);
+
+  const [listStatusQuick, setListStatusQuick] = useState<ListStatusQuick>('all');
+  const [listDateFrom, setListDateFrom] = useState('');
+  const [listDateTo, setListDateTo] = useState('');
+  const [listVendorId, setListVendorId] = useState('');
+  const [colRcId, setColRcId] = useState('');
+  const [colRcDetails, setColRcDetails] = useState('');
+  const [colRcStatus, setColRcStatus] = useState('');
+  const [colGrnId, setColGrnId] = useState('');
+  const [colGrnDetails, setColGrnDetails] = useState('');
+  const [colGrnStatus, setColGrnStatus] = useState('');
+  const [colInvId, setColInvId] = useState('');
+  const [colInvDetails, setColInvDetails] = useState('');
+  const [colInvStatus, setColInvStatus] = useState('');
+
+  useEffect(() => {
+    setListStatusQuick('all');
+    setListDateFrom('');
+    setListDateTo('');
+    setListVendorId('');
+    setColRcId('');
+    setColRcDetails('');
+    setColRcStatus('');
+    setColGrnId('');
+    setColGrnDetails('');
+    setColGrnStatus('');
+    setColInvId('');
+    setColInvDetails('');
+    setColInvStatus('');
+  }, [viewMode]);
 
   // Update total amount whenever items change
   useEffect(() => {
@@ -701,6 +740,77 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
   const getItemCenters = (item: ItemLine): string[] =>
     (item.centerNames && item.centerNames.length > 0) ? item.centerNames : (item.centerName ? [item.centerName] : []);
 
+  const noPurchaseOrders: PurchaseOrder[] = [];
+
+  const vendorOptionsForList = useMemo(
+    () => vendorsForDropdown.map((v) => ({ id: v.id, name: v.name })),
+    [vendorsForDropdown]
+  );
+
+  const rcListCounts = useMemo(
+    () => ({
+      approved: rateContracts.filter((r) => r.status === 'Approved').length,
+      pending: rateContracts.filter((r) => r.status === 'Pending').length,
+    }),
+    [rateContracts]
+  );
+  const grnListCounts = useMemo(
+    () => ({
+      approved: rcGrns.filter((g) => g.status === 'Approved').length,
+      pending: rcGrns.filter((g) => g.status === 'Pending').length,
+    }),
+    [rcGrns]
+  );
+  const invListCounts = useMemo(
+    () => ({
+      approved: rcInvoices.filter((i) => i.status === 'Approved').length,
+      pending: rcInvoices.filter((i) => i.status === 'Pending').length,
+    }),
+    [rcInvoices]
+  );
+
+  const filteredRateContracts = useMemo(() => {
+    return rateContracts.filter((rc) => {
+      if (!inCreatedAtRange(rc.createdAt, listDateFrom, listDateTo)) return false;
+      if (!matchesVendorFilter(rc.vendorId, listVendorId)) return false;
+      if (!matchesStatusQuickFilter(rc.status, listStatusQuick)) return false;
+      const vendorName = (masters['Vendor'] || []).find((v) => v.id === rc.vendorId)?.name || '';
+      const details = `${vendorName} ${rc.items.length} ${(Number(rc.amount) || 0).toFixed(2)}`;
+      if (!textIncludes(rc.id, colRcId)) return false;
+      if (!textIncludes(details, colRcDetails)) return false;
+      if (!textIncludes(rc.status, colRcStatus)) return false;
+      return true;
+    });
+  }, [rateContracts, masters, listDateFrom, listDateTo, listVendorId, listStatusQuick, colRcId, colRcDetails, colRcStatus]);
+
+  const filteredRcGrns = useMemo(() => {
+    return rcGrns.filter((grn) => {
+      if (!inCreatedAtRange(grn.createdAt, listDateFrom, listDateTo)) return false;
+      const vid = getGrnVendorId(grn, rateContracts, noPurchaseOrders, masters);
+      if (!matchesVendorFilter(vid, listVendorId)) return false;
+      if (!matchesStatusQuickFilter(grn.status, listStatusQuick)) return false;
+      const details = `${grn.location} ${grn.rateContractId || ''} ${grn.items.length} ${(Number(grn.amount) || 0).toFixed(2)}`;
+      if (!textIncludes(grn.id, colGrnId)) return false;
+      if (!textIncludes(details, colGrnDetails)) return false;
+      if (!textIncludes(grn.status, colGrnStatus)) return false;
+      return true;
+    });
+  }, [rcGrns, rateContracts, masters, listDateFrom, listDateTo, listVendorId, listStatusQuick, colGrnId, colGrnDetails, colGrnStatus]);
+
+  const filteredRcInvoices = useMemo(() => {
+    return rcInvoices.filter((inv) => {
+      if (!inCreatedAtRange(inv.createdAt, listDateFrom, listDateTo)) return false;
+      const vid = getRcInvoiceVendorId(inv, grns, rateContracts, noPurchaseOrders, masters);
+      if (!matchesVendorFilter(vid, listVendorId)) return false;
+      if (!matchesStatusQuickFilter(inv.status, listStatusQuick)) return false;
+      const details = `${inv.location} ${inv.grnId || ''} ${(Number(inv.amount) || 0).toFixed(2)}`;
+      if (!textIncludes(inv.id, colInvId)) return false;
+      if (!textIncludes(details, colInvDetails)) return false;
+      if (!textIncludes(inv.status, colInvStatus)) return false;
+      return true;
+    });
+  }, [rcInvoices, grns, rateContracts, masters, listDateFrom, listDateTo, listVendorId, listStatusQuick, colInvId, colInvDetails, colInvStatus]);
+
   const normalizeRcForForm = (rc: RateContract): RateContract => ({
     ...rc,
     items: (rc.items || []).map(item => {
@@ -737,19 +847,91 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
 
   return (
     <div className="space-y-6">
-      <div className="flex space-x-4 border-b border-slate-200 pb-4">
-        {(['RC', 'GRN', 'Invoice'] as ViewMode[]).map(mode => (
-          <button
-            key={mode}
-            onClick={() => { setViewMode(mode); setShowForm(false); }}
-            className={`px-4 py-2 rounded-lg font-bold transition-all ${
-              viewMode === mode ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100'
-            }`}
-          >
-            {mode === 'RC' ? 'Rate Contracts' : mode === 'GRN' ? 'GRN' : 'Invoices'}
-          </button>
-        ))}
+      <div className="flex flex-wrap justify-between items-center gap-3 border-b border-slate-200 pb-4">
+        <div className="flex flex-wrap gap-2">
+          {(['RC', 'GRN', 'Invoice'] as ViewMode[]).map(mode => (
+            <button
+              key={mode}
+              onClick={() => { setViewMode(mode); setShowForm(false); }}
+              className={`px-4 py-2 rounded-lg font-bold transition-all ${
+                viewMode === mode ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100'
+              }`}
+            >
+              {mode === 'RC' ? 'Rate Contracts' : mode === 'GRN' ? 'GRN' : 'Invoices'}
+            </button>
+          ))}
+        </div>
+        {!showForm && (
+          <TransactionListFilterBar
+            approvedCount={viewMode === 'RC' ? rcListCounts.approved : viewMode === 'GRN' ? grnListCounts.approved : invListCounts.approved}
+            pendingCount={viewMode === 'RC' ? rcListCounts.pending : viewMode === 'GRN' ? grnListCounts.pending : invListCounts.pending}
+            statusQuick={listStatusQuick}
+            onStatusQuick={setListStatusQuick}
+            dateFrom={listDateFrom}
+            dateTo={listDateTo}
+            onDateFrom={setListDateFrom}
+            onDateTo={setListDateTo}
+            vendorId={listVendorId}
+            onVendorId={setListVendorId}
+            vendors={vendorOptionsForList}
+          />
+        )}
       </div>
+
+      {!showForm && (
+        <div
+          className="grid w-full gap-0 border-b border-slate-100 bg-slate-50/80"
+          style={{
+            gridTemplateColumns: 'minmax(0, 18%) minmax(0, 42%) minmax(0, 18%) minmax(0, 22%)',
+          }}
+          role="search"
+          aria-label="Column filters"
+        >
+          <div className="px-6 py-2 min-w-0">
+            <input
+              type="text"
+              placeholder="Filter…"
+              value={viewMode === 'RC' ? colRcId : viewMode === 'GRN' ? colGrnId : colInvId}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (viewMode === 'RC') setColRcId(v);
+                else if (viewMode === 'GRN') setColGrnId(v);
+                else setColInvId(v);
+              }}
+              className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
+            />
+          </div>
+          <div className="px-6 py-2 min-w-0">
+            <input
+              type="text"
+              placeholder="Filter…"
+              value={viewMode === 'RC' ? colRcDetails : viewMode === 'GRN' ? colGrnDetails : colInvDetails}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (viewMode === 'RC') setColRcDetails(v);
+                else if (viewMode === 'GRN') setColGrnDetails(v);
+                else setColInvDetails(v);
+              }}
+              className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
+            />
+          </div>
+          <div className="px-6 py-2 min-w-0">
+            <input
+              type="text"
+              placeholder="Filter…"
+              value={viewMode === 'RC' ? colRcStatus : viewMode === 'GRN' ? colGrnStatus : colInvStatus}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (viewMode === 'RC') setColRcStatus(v);
+                else if (viewMode === 'GRN') setColGrnStatus(v);
+                else setColInvStatus(v);
+              }}
+              className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
+            />
+          </div>
+          <div className="px-6 py-2 min-w-0" aria-hidden="true" />
+        </div>
+      )}
 
       <div className="flex justify-between items-center">
         <h2 className="text-xl font-black text-slate-800">
@@ -1701,17 +1883,23 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
         </div>
       ) : (
         <div className="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden">
-          <table className="w-full text-left border-collapse">
+          <table className="w-full table-fixed text-left border-collapse">
+            <colgroup>
+              <col style={{ width: '18%' }} />
+              <col style={{ width: '42%' }} />
+              <col style={{ width: '18%' }} />
+              <col style={{ width: '22%' }} />
+            </colgroup>
             <thead>
               <tr className="bg-slate-50/50 border-b border-slate-100">
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">ID / Date</th>
-                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Details</th>
+                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Vendor Name</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Status</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
-              {viewMode === 'RC' && rateContracts.map(rc => (
+              {viewMode === 'RC' && filteredRateContracts.map(rc => (
                 <tr key={rc.id} className="hover:bg-slate-50/50 transition-colors">
                   <td className="px-6 py-4">
                     <div className="text-sm font-black text-slate-900">{rc.id}</div>
@@ -1821,7 +2009,7 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                 </tr>
               ))}
 
-              {viewMode === 'GRN' && rcGrns.map(grn => {
+              {viewMode === 'GRN' && filteredRcGrns.map(grn => {
                 const rc = rateContracts.find(r => r.id === grn.rateContractId);
                 return (
                   <tr key={grn.id} className="hover:bg-slate-50/50 transition-colors">
@@ -1929,7 +2117,7 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                 );
               })}
 
-              {viewMode === 'Invoice' && rcInvoices.map(inv => (
+              {viewMode === 'Invoice' && filteredRcInvoices.map(inv => (
                 <tr key={inv.id} className="hover:bg-slate-50/50 transition-colors">
                   <td className="px-6 py-4">
                     <div className="text-sm font-black text-slate-900">{inv.id}</div>
@@ -2010,12 +2198,33 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                 </tr>
               ))}
 
-              {((viewMode === 'RC' && rateContracts.length === 0) || 
-                (viewMode === 'GRN' && rcGrns.length === 0) || 
+              {((viewMode === 'RC' && rateContracts.length === 0) ||
+                (viewMode === 'GRN' && rcGrns.length === 0) ||
                 (viewMode === 'Invoice' && rcInvoices.length === 0)) && (
                 <tr>
                   <td colSpan={4} className="px-6 py-12 text-center text-slate-400 font-medium">
                     No records found for {viewMode}
+                  </td>
+                </tr>
+              )}
+              {viewMode === 'RC' && rateContracts.length > 0 && filteredRateContracts.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="px-6 py-12 text-center text-slate-500 text-sm font-bold">
+                    No records match your filters.
+                  </td>
+                </tr>
+              )}
+              {viewMode === 'GRN' && rcGrns.length > 0 && filteredRcGrns.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="px-6 py-12 text-center text-slate-500 text-sm font-bold">
+                    No records match your filters.
+                  </td>
+                </tr>
+              )}
+              {viewMode === 'Invoice' && rcInvoices.length > 0 && filteredRcInvoices.length === 0 && (
+                <tr>
+                  <td colSpan={4} className="px-6 py-12 text-center text-slate-500 text-sm font-bold">
+                    No records match your filters.
                   </td>
                 </tr>
               )}
