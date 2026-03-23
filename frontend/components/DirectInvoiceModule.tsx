@@ -104,6 +104,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
     gst: 0,
     amount: 0,
     remarks: '',
+    overallSummary: '',
     attachments: [],
     shippingAddressId: '',
     billingAddressId: '',
@@ -324,6 +325,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
       gst: 0,
       amount: 0,
       remarks: '',
+      overallSummary: '',
       attachments: [],
       shippingAddressId: '',
       billingAddressId: '',
@@ -770,6 +772,15 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
                 className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
                 value={invoiceForm.remarks}
                 onChange={e => setInvoiceForm({ ...invoiceForm, remarks: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Overall summary</label>
+              <textarea
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium min-h-[88px]"
+                value={invoiceForm.overallSummary ?? ''}
+                onChange={e => setInvoiceForm({ ...invoiceForm, overallSummary: e.target.value })}
+                placeholder="Summary..."
               />
             </div>
 

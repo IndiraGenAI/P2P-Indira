@@ -107,6 +107,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     gst: 0,
     amount: 0,
     remarks: '',
+    overallSummary: '',
     attachments: [],
     shippingAddressId: '',
     billingAddressId: '',
@@ -135,7 +136,8 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
           id: Math.random().toString(), // New IDs for PO items
           centerName: item.centerName || pendingPR.centerNames?.[0] || '',
         })),
-        remarks: `Created from ${pendingPR.id}: ${pendingPR.remarks}`,
+        remarks: pendingPR.remarks ?? '',
+        overallSummary: pendingPR.overallSummary ?? '',
         amount: pendingPR.amount,
         attachments: pendingPR.attachments.map(att => ({ ...att, source: 'PO' })),
         tds: 0,
@@ -161,6 +163,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     items: [],
     amount: 0,
     remarks: '',
+    overallSummary: '',
     attachments: [],
     shippingAddressId: '',
     billingAddressId: ''
@@ -405,6 +408,8 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     entityName: masters.Entity?.[0]?.name || '',
     vendorSiteId: '',
     location: '',
+    remarks: '',
+    overallSummary: '',
     attachments: [],
     shippingAddressId: '',
     billingAddressId: ''
@@ -654,6 +659,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       status: 'Pending',
       currentStepIndex: 0,
       createdAt: new Date().toISOString(),
+      createdBy: currentUser.id,
       attachments: invoiceForm.attachments || []
     };
     setInvoices([...invoices, newInvoice]);
@@ -667,12 +673,12 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       vendorId: '', vendorSiteId: '', transactionType: getItemTypesFromMasters(masters)[0]?.name ?? '', validFrom: '', validTo: '',
       frequency: 'One-Time', department: '', subDepartment: '', paymentTerms: '',
       centerNames: [], items: [{ id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, remarks: '', coaCode: '', centerName: '' }], // line gst omitted = follow header
-      tds: 0, gst: 0, amount: 0, remarks: '', attachments: [],
+      tds: 0, gst: 0, amount: 0, remarks: '', overallSummary: '', attachments: [],
       shippingAddressId: '', billingAddressId: '',
       isUnbudgeted: false, unbudgetedJustification: ''
     });
-    setGrnForm({ vendorSiteId: '', location: '', invoiceNumber: '', invoiceDate: '', department: '', subDepartment: '', tds: 0, gst: 0, items: [], amount: 0, remarks: '', attachments: [], shippingAddressId: '', billingAddressId: '' });
-    setInvoiceForm({ vendorSiteId: '', location: '', attachments: [], shippingAddressId: '', billingAddressId: '' });
+    setGrnForm({ vendorSiteId: '', location: '', invoiceNumber: '', invoiceDate: '', department: '', subDepartment: '', tds: 0, gst: 0, items: [], amount: 0, remarks: '', overallSummary: '', attachments: [], shippingAddressId: '', billingAddressId: '' });
+    setInvoiceForm({ vendorSiteId: '', location: '', remarks: '', overallSummary: '', attachments: [], shippingAddressId: '', billingAddressId: '' });
     setSelectedPO(null);
     setSelectedGRN(null);
   };
@@ -1508,11 +1514,12 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                 </div>
 
                 <div className="space-y-2 md:col-span-2">
-                  <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Remarks</label>
-                  <textarea 
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
-                    value={poForm.remarks}
-                    onChange={e => setPoForm({ ...poForm, remarks: e.target.value })}
+                  <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Overall summary</label>
+                  <textarea
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium min-h-[88px]"
+                    value={poForm.overallSummary ?? ''}
+                    onChange={e => setPoForm({ ...poForm, overallSummary: e.target.value })}
+                    placeholder="Summary..."
                   />
                 </div>
               </>
@@ -1766,6 +1773,16 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                     </div>
                   </div>
                 </div>
+                <div className="space-y-2 md:col-span-2 mt-2">
+                  <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Overall summary</label>
+                  <textarea
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium min-h-[80px] disabled:opacity-50"
+                    value={grnForm.overallSummary ?? ''}
+                    onChange={e => setGrnForm({ ...grnForm, overallSummary: e.target.value })}
+                    disabled={!!grnForm.id && isGrnReadOnly}
+                    placeholder="Overall summary (from PO by default; editable)"
+                  />
+                </div>
               </>
             )}
 
@@ -1956,6 +1973,26 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                     </div>
                   </div>
                 </div>
+                <div className="col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                  <div className="space-y-2">
+                    <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Remarks</label>
+                    <textarea
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium min-h-[80px]"
+                      value={invoiceForm.remarks ?? ''}
+                      onChange={e => setInvoiceForm({ ...invoiceForm, remarks: e.target.value })}
+                      placeholder="Header remarks (from GRN by default; editable)"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Overall summary</label>
+                    <textarea
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium min-h-[80px]"
+                      value={invoiceForm.overallSummary ?? ''}
+                      onChange={e => setInvoiceForm({ ...invoiceForm, overallSummary: e.target.value })}
+                      placeholder="Overall summary (from GRN by default; editable)"
+                    />
+                  </div>
+                </div>
               </>
             )}
 
@@ -2103,6 +2140,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                                   department: po.department || '',
                                   subDepartment: po.subDepartment || '',
                                   remarks: po.remarks || '',
+                                  overallSummary: po.overallSummary || '',
                                   invoiceNumber: '',
                                   invoiceDate: '',
                                   tds: po.tds ?? 0,
@@ -2208,6 +2246,8 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                                   location: grn.location || '',
                                   shippingAddressId: grn.shippingAddressId || '',
                                   billingAddressId: grn.billingAddressId || '',
+                                  remarks: grn.remarks || '',
+                                  overallSummary: grn.overallSummary || '',
                                   items: (grn.items || []).map(i => ({ ...i })),
                                   amount: Number(grn.amount) || 0,
                                   attachments: []

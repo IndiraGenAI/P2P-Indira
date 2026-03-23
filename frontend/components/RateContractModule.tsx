@@ -64,6 +64,7 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
     items: [{ id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, centerName: '', remarks: '' }],
     amount: 0,
     remarks: '',
+    overallSummary: '',
     attachments: [],
     shippingAddressId: '',
     billingAddressId: ''
@@ -76,6 +77,7 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
     items: [],
     amount: 0,
     remarks: '',
+    overallSummary: '',
     attachments: [],
     shippingAddressId: '',
     billingAddressId: '',
@@ -87,6 +89,8 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
     entityName: masters.Entity?.[0]?.name || '',
     vendorSiteId: '',
     location: '',
+    remarks: '',
+    overallSummary: '',
     attachments: [],
     shippingAddressId: '',
     billingAddressId: '',
@@ -491,11 +495,11 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
       vendorId: '', vendorSiteId: '', transactionType: getItemTypesFromMasters(masters)[0]?.name ?? '', validFrom: '', validTo: '', requiredDate: '',
       frequency: 'Monthly', department: '', subDepartment: '', paymentTerms: '',
       items: [{ id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, centerName: '', remarks: '' }],
-      amount: 0, remarks: '', attachments: [],
+      amount: 0, remarks: '', overallSummary: '', attachments: [],
       shippingAddressId: '', billingAddressId: ''
     });
-    setGrnForm({ vendorSiteId: '', location: '', items: [], amount: 0, remarks: '', attachments: [], shippingAddressId: '', billingAddressId: '', tds: 0, gst: 0, invoiceNumber: '', invoiceDate: '' });
-    setInvoiceForm({ vendorSiteId: '', location: '', attachments: [], shippingAddressId: '', billingAddressId: '', tds: 0, gst: 0, items: [], invoiceNumber: '', invoiceDate: '' });
+    setGrnForm({ vendorSiteId: '', location: '', items: [], amount: 0, remarks: '', overallSummary: '', attachments: [], shippingAddressId: '', billingAddressId: '', tds: 0, gst: 0, invoiceNumber: '', invoiceDate: '' });
+    setInvoiceForm({ vendorSiteId: '', location: '', remarks: '', overallSummary: '', attachments: [], shippingAddressId: '', billingAddressId: '', tds: 0, gst: 0, items: [], invoiceNumber: '', invoiceDate: '' });
     setSelectedRC(null);
     setSelectedGRN(null);
   };
@@ -1274,11 +1278,13 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                 </div>
 
                 <div className="space-y-2 md:col-span-2">
-                  <textarea 
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium disabled:opacity-50"
-                    value={rcForm.remarks}
-                    onChange={e => setRcForm({ ...rcForm, remarks: e.target.value })}
+                  <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Overall summary</label>
+                  <textarea
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium disabled:opacity-50 min-h-[88px]"
+                    value={rcForm.overallSummary ?? ''}
+                    onChange={e => setRcForm({ ...rcForm, overallSummary: e.target.value })}
                     disabled={isRcReadOnly}
+                    placeholder="Summary..."
                   />
                 </div>
 
@@ -1517,6 +1523,16 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                     </div>
                   </div>
                 </div>
+                <div className="space-y-2 md:col-span-2 mt-2">
+                  <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Overall summary</label>
+                  <textarea
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium min-h-[80px] disabled:opacity-50"
+                    value={grnForm.overallSummary ?? ''}
+                    onChange={e => setGrnForm({ ...grnForm, overallSummary: e.target.value })}
+                    disabled={!!grnForm.id && isGrnReadOnly}
+                    placeholder="Overall summary..."
+                  />
+                </div>
 
               </>
             )}
@@ -1609,6 +1625,29 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                     <option value="">Select Location</option>
                     {CENTERS.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
+                </div>
+
+                <div className="col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Remarks</label>
+                    <textarea
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium min-h-[80px] disabled:opacity-50"
+                      value={invoiceForm.remarks ?? ''}
+                      onChange={e => setInvoiceForm({ ...invoiceForm, remarks: e.target.value })}
+                      disabled={isInvoiceReadOnly}
+                      placeholder="Header remarks (from GRN by default; editable)"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Overall summary</label>
+                    <textarea
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium min-h-[80px] disabled:opacity-50"
+                      value={invoiceForm.overallSummary ?? ''}
+                      onChange={e => setInvoiceForm({ ...invoiceForm, overallSummary: e.target.value })}
+                      disabled={isInvoiceReadOnly}
+                      placeholder="Overall summary (from GRN by default; editable)"
+                    />
+                  </div>
                 </div>
 
                 {/* <div className="space-y-2">
@@ -1967,6 +2006,7 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                                 invoiceNumber: '',
                                 invoiceDate: '',
                                 remarks: rc.remarks || '',
+                                overallSummary: rc.overallSummary || '',
                                 items: (rc.items || []).map(item => ({
                                   ...item,
                                   quantity: item.quantity ?? 1,
@@ -2079,6 +2119,8 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                                   subDepartment: grn.subDepartment || '',
                                   invoiceNumber: grn.invoiceNumber ?? '',
                                   invoiceDate: grn.invoiceDate ?? '',
+                                  remarks: grn.remarks || '',
+                                  overallSummary: grn.overallSummary || '',
                                   tds: grn.tds ?? 0,
                                   gst: grn.gst ?? 0,
                                   items: (grn.items || []).map(i => ({ ...i })),

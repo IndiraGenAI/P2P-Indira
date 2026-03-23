@@ -53,6 +53,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
     items: [{ id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, remarks: '' }],
     amount: 0,
     remarks: '',
+    overallSummary: '',
     attachments: [],
     isUnbudgeted: false,
     unbudgetedJustification: ''
@@ -155,7 +156,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
       // If budget is now available, uncheck unbudgeted
       if (budgetCheck.ok) {
         newForm.isUnbudgeted = false;
-        newForm.unbudgetedJustification = '';
+        newForm.unbudgetedJustification = '';x
       }
       return newForm;
     });
@@ -218,7 +219,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
       vendorId: '', vendorSiteId: '', transactionType: getItemTypesFromMasters(masters)[0]?.name ?? '', validFrom: '', validTo: '', requiredDate: '',
       frequency: 'One-Time', department: '', subDepartment: '', paymentTerms: '',
       centerNames: [], items: [{ id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, remarks: '', coaCode: '' }],
-      amount: 0, remarks: '', attachments: [],
+      amount: 0, remarks: '', overallSummary: '', attachments: [],
       isUnbudgeted: false, unbudgetedJustification: ''
     });
   };
@@ -605,6 +606,16 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
                   </div>
                 ))}
               </div>
+            </div>
+
+            <div className="space-y-2 md:col-span-2">
+              <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Overall summary</label>
+              <textarea
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium min-h-[88px]"
+                value={prForm.overallSummary ?? ''}
+                onChange={e => setPrForm({ ...prForm, overallSummary: e.target.value })}
+                placeholder="Summary.."
+              />
             </div>
 
             <div className="col-span-2 border-t border-slate-100 pt-6 mt-4">

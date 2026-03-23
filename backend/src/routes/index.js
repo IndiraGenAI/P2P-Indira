@@ -573,7 +573,7 @@ router.patch('/masters/:masterType/:id/workflow', async (req, res) => {
 });
 
 // --- PURCHASE REQUESTS ---
-const PR_COLS = ['id', 'entity_name', 'vendor_id', 'vendor_site_id', 'transaction_type', 'valid_from', 'valid_to', 'frequency', 'department', 'sub_department', 'payment_terms', 'terms_and_conditions_id', 'center_names', 'items', 'amount', 'remarks', 'attachments', 'status', 'current_step_index', 'is_unbudgeted', 'unbudgeted_justification', 'unbudgeted_attachment_url', 'rejection_remarks', 'created_by', 'created_at', 'required_date', 'shipping_address_id', 'billing_address_id'];
+const PR_COLS = ['id', 'entity_name', 'vendor_id', 'vendor_site_id', 'transaction_type', 'valid_from', 'valid_to', 'frequency', 'department', 'sub_department', 'payment_terms', 'terms_and_conditions_id', 'center_names', 'items', 'amount', 'remarks', 'overall_summary', 'attachments', 'status', 'current_step_index', 'is_unbudgeted', 'unbudgeted_justification', 'unbudgeted_attachment_url', 'rejection_remarks', 'created_by', 'created_at', 'required_date', 'shipping_address_id', 'billing_address_id'];
 router.get('/purchase-requests', async (req, res) => {
   try {
     const rows = await getAll('purchase_requests');
@@ -593,7 +593,7 @@ router.post('/purchase-requests', async (req, res) => {
 });
 
 // --- RATE CONTRACTS ---
-const RC_COLS = ['id', 'entity_name', 'vendor_id', 'vendor_site_id', 'transaction_type', 'valid_from', 'valid_to', 'frequency', 'department', 'sub_department', 'payment_terms', 'terms_and_conditions_id', 'items', 'amount', 'remarks', 'attachments', 'status', 'current_step_index', 'rejection_remarks', 'created_by', 'created_at', 'required_date', 'shipping_address_id', 'billing_address_id'];
+const RC_COLS = ['id', 'entity_name', 'vendor_id', 'vendor_site_id', 'transaction_type', 'valid_from', 'valid_to', 'frequency', 'department', 'sub_department', 'payment_terms', 'terms_and_conditions_id', 'items', 'amount', 'remarks', 'overall_summary', 'attachments', 'status', 'current_step_index', 'rejection_remarks', 'created_by', 'created_at', 'required_date', 'shipping_address_id', 'billing_address_id'];
 router.get('/rate-contracts', async (req, res) => {
   try {
     const rows = await getAll('rate_contracts');
@@ -613,7 +613,7 @@ router.post('/rate-contracts', async (req, res) => {
 });
 
 // --- PURCHASE ORDERS ---
-const PO_COLS = ['id', 'entity_name', 'vendor_id', 'vendor_site_id', 'transaction_type', 'valid_from', 'valid_to', 'frequency', 'department', 'sub_department', 'payment_terms', 'terms_and_conditions_id', 'center_names', 'items', 'tds', 'gst', 'amount', 'remarks', 'attachments', 'status', 'current_step_index', 'is_unbudgeted', 'unbudgeted_justification', 'unbudgeted_attachment_url', 'rejection_remarks', 'created_by', 'created_at', 'required_date', 'shipping_address_id', 'billing_address_id', 'is_advance_po', 'advance_percentage'];
+const PO_COLS = ['id', 'entity_name', 'vendor_id', 'vendor_site_id', 'transaction_type', 'valid_from', 'valid_to', 'frequency', 'department', 'sub_department', 'payment_terms', 'terms_and_conditions_id', 'center_names', 'items', 'tds', 'gst', 'amount', 'remarks', 'overall_summary', 'attachments', 'status', 'current_step_index', 'is_unbudgeted', 'unbudgeted_justification', 'unbudgeted_attachment_url', 'rejection_remarks', 'created_by', 'created_at', 'required_date', 'shipping_address_id', 'billing_address_id', 'is_advance_po', 'advance_percentage'];
 router.get('/purchase-orders', async (req, res) => {
   try {
     const rows = await getAll('purchase_orders');
@@ -633,7 +633,7 @@ router.post('/purchase-orders', async (req, res) => {
 });
 
 // --- GRNs ---
-const GRN_COLS = ['id', 'entity_name', 'rate_contract_id', 'purchase_order_id', 'vendor_site_id', 'location', 'department', 'sub_department', 'invoice_number', 'invoice_date', 'items', 'amount', 'remarks', 'attachments', 'status', 'current_step_index', 'rejection_remarks', 'created_by', 'created_at', 'shipping_address_id', 'billing_address_id', 'tds', 'gst'];
+const GRN_COLS = ['id', 'entity_name', 'rate_contract_id', 'purchase_order_id', 'vendor_site_id', 'location', 'department', 'sub_department', 'invoice_number', 'invoice_date', 'items', 'amount', 'remarks', 'overall_summary', 'attachments', 'status', 'current_step_index', 'rejection_remarks', 'created_by', 'created_at', 'shipping_address_id', 'billing_address_id', 'tds', 'gst'];
 router.get('/grns', async (req, res) => {
   try {
     const rows = await getAll('grns');
@@ -666,7 +666,7 @@ router.post('/grns', async (req, res) => {
 });
 
 // --- INVOICES ---
-const INV_COLS = ['id', 'entity_name', 'grn_id', 'vendor_site_id', 'location', 'department', 'sub_department', 'invoice_number', 'invoice_date', 'items', 'amount', 'status', 'current_step_index', 'rejection_remarks', 'created_by', 'created_at', 'attachments', 'shipping_address_id', 'billing_address_id', 'tds', 'gst'];
+const INV_COLS = ['id', 'entity_name', 'grn_id', 'vendor_site_id', 'location', 'department', 'sub_department', 'invoice_number', 'invoice_date', 'items', 'amount', 'remarks', 'overall_summary', 'status', 'current_step_index', 'rejection_remarks', 'created_by', 'created_at', 'attachments', 'shipping_address_id', 'billing_address_id', 'tds', 'gst'];
 router.get('/invoices', async (req, res) => {
   try {
     const rows = await getAll('invoices');
@@ -699,7 +699,7 @@ router.post('/invoices', async (req, res) => {
 });
 
 // --- DIRECT INVOICES (standalone; no GRN link) ---
-const DIRECT_INV_COLS = ['id', 'entity_name', 'vendor_site_id', 'location', 'department', 'sub_department', 'invoice_number', 'invoice_date', 'items', 'amount', 'status', 'current_step_index', 'rejection_remarks', 'created_by', 'created_at', 'center_names', 'attachments', 'shipping_address_id', 'billing_address_id', 'tds', 'gst'];
+const DIRECT_INV_COLS = ['id', 'entity_name', 'vendor_site_id', 'location', 'department', 'sub_department', 'invoice_number', 'invoice_date', 'items', 'amount', 'remarks', 'overall_summary', 'status', 'current_step_index', 'rejection_remarks', 'created_by', 'created_at', 'center_names', 'attachments', 'shipping_address_id', 'billing_address_id', 'tds', 'gst'];
 router.get('/direct-invoices', async (req, res) => {
   try {
     const rows = await getAll('direct_invoices');

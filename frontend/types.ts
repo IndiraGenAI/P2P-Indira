@@ -163,6 +163,8 @@ export interface PurchaseRequest {
   items: ItemLine[];
   amount: number;
   remarks: string;
+  /** Document-level summary separate from remarks; flows independently PR → PO → GRN → Invoice. */
+  overallSummary?: string;
   attachments: Attachment[];
   status: 'Draft' | 'Pending' | 'Approved' | 'Rejected' | 'Amended' | 'Budget Hold';
   currentStepIndex: number;
@@ -193,6 +195,7 @@ export interface RateContract {
   items: ItemLine[];
   amount: number;
   remarks: string;
+  overallSummary?: string;
   attachments: Attachment[];
   status: 'Draft' | 'Pending' | 'Approved' | 'Rejected' | 'Amended';
   currentStepIndex: number;
@@ -223,6 +226,7 @@ export interface PurchaseOrder {
   gst?: number; // top-level percentage
   amount: number;
   remarks: string;
+  overallSummary?: string;
   attachments: Attachment[];
   status: 'Draft' | 'Pending' | 'Approved' | 'Rejected' | 'Amended' | 'Budget Hold';
   currentStepIndex: number;
@@ -253,6 +257,7 @@ export interface GRN {
   items: ItemLine[];
   amount: number;
   remarks: string;
+  overallSummary?: string;
   attachments: Attachment[];
   status: 'Draft' | 'Pending' | 'Approved' | 'Rejected' | 'Reversed';
   currentStepIndex: number;
@@ -278,6 +283,9 @@ export interface Invoice {
   invoiceDate?: string;
   items: ItemLine[];
   amount: number;
+  /** Header remarks (GRN-based and direct invoices). */
+  remarks?: string;
+  overallSummary?: string;
   status: 'Draft' | 'Pending' | 'Approved' | 'Rejected' | 'Reversed';
   currentStepIndex: number;
   rejectionRemarks?: string;
