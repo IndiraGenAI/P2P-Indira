@@ -58,6 +58,19 @@ type PoRemainingItem = {
 const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({ 
   masters, purchaseOrders, setPurchaseOrders, grns, setGrns, invoices, setInvoices, pendingPR, onPOCreated, currentUser, workflows, budgets, setBudgets, workflowV2Rules = []
 }) => {
+  const getTodayISTDate = () => {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date());
+    const year = parts.find((p) => p.type === 'year')?.value ?? '';
+    const month = parts.find((p) => p.type === 'month')?.value ?? '';
+    const day = parts.find((p) => p.type === 'day')?.value ?? '';
+    return `${year}-${month}-${day}`;
+  };
+
   const vendorsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Vendor', masters.Vendor ?? []) as MasterRecord[];
   const itemsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Item', masters.Item ?? []) as MasterRecord[];
   const budgetsForDeduction = filterByWorkflowApproval<Budget>(workflowV2Rules, 'Budget', budgets);
@@ -183,7 +196,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     vendorId: '',
     vendorSiteId: '',
     transactionType: getItemTypesFromMasters(masters)[0]?.name ?? '',
-    validFrom: '',
+    validFrom: getTodayISTDate(),
     validTo: '',
     frequency: 'One-Time',
     department: '',
@@ -212,7 +225,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
         vendorId: pendingPR.vendorId || '',
         vendorSiteId: pendingPR.vendorSiteId || '',
         transactionType: pendingPR.transactionType || (getItemTypesFromMasters(masters)[0]?.name ?? ''),
-        validFrom: pendingPR.validFrom || new Date().toISOString().split('T')[0],
+        validFrom: pendingPR.validFrom || getTodayISTDate(),
         validTo: pendingPR.validTo || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
         frequency: pendingPR.frequency || 'One-Time',
         department: pendingPR.department,
@@ -899,7 +912,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
   const resetForms = () => {
     setPoForm({
       entityName: masters.Entity?.[0]?.name || '',
-      vendorId: '', vendorSiteId: '', transactionType: getItemTypesFromMasters(masters)[0]?.name ?? '', validFrom: '', validTo: '',
+      vendorId: '', vendorSiteId: '', transactionType: getItemTypesFromMasters(masters)[0]?.name ?? '', validFrom: getTodayISTDate(), validTo: '',
       frequency: 'One-Time', department: '', subDepartment: '', paymentTerms: '',
       centerNames: [], items: [{ id: Math.random().toString(), itemName: '', desc: '', quantity: 1, rate: 0, amount: 0, remarks: '', coaCode: '', centerName: '' }], // line gst omitted = follow header
       tds: 0, gst: 0, amount: 0, remarks: '', overallSummary: '', attachments: [],

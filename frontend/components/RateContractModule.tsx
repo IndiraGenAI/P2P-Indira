@@ -40,6 +40,19 @@ type ViewMode = 'RC' | 'GRN' | 'Invoice';
 const RateContractModule: React.FC<RateContractModuleProps> = ({ 
   masters, rateContracts, setRateContracts, grns, setGrns, invoices, setInvoices, currentUser, workflows, workflowV2Rules = []
 }) => {
+  const getTodayISTDate = () => {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date());
+    const year = parts.find((p) => p.type === 'year')?.value ?? '';
+    const month = parts.find((p) => p.type === 'month')?.value ?? '';
+    const day = parts.find((p) => p.type === 'day')?.value ?? '';
+    return `${year}-${month}-${day}`;
+  };
+
   const vendorsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Vendor', masters.Vendor ?? []) as MasterRecord[];
   const itemsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Item', masters.Item ?? []) as MasterRecord[];
   const [viewMode, setViewMode] = useState<ViewMode>('RC');
@@ -55,7 +68,7 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
     vendorId: '',
     vendorSiteId: '',
     transactionType: getItemTypesFromMasters(masters)[0]?.name ?? '',
-    validFrom: '',
+    validFrom: getTodayISTDate(),
     validTo: '',
     requiredDate: '',
     frequency: 'Monthly',
@@ -508,7 +521,7 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
   const resetForms = () => {
     setRcForm({
       entityName: masters.Entity?.[0]?.name || '',
-      vendorId: '', vendorSiteId: '', transactionType: getItemTypesFromMasters(masters)[0]?.name ?? '', validFrom: '', validTo: '', requiredDate: '',
+      vendorId: '', vendorSiteId: '', transactionType: getItemTypesFromMasters(masters)[0]?.name ?? '', validFrom: getTodayISTDate(), validTo: '', requiredDate: '',
       frequency: 'Monthly', department: '', subDepartment: '', paymentTerms: '',
       items: [{ id: Math.random().toString(), itemName: '', desc: '', quantity: 1, rate: 0, amount: 0, centerName: '', remarks: '' }],
       amount: 0, remarks: '', overallSummary: '', attachments: [],

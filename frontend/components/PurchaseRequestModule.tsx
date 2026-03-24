@@ -34,6 +34,19 @@ interface PurchaseRequestModuleProps {
 const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({ 
   masters, purchaseRequests, setPurchaseRequests, onCreatePO, currentUser, workflows, budgets, workflowV2Rules = []
 }) => {
+  const getTodayISTDate = () => {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date());
+    const year = parts.find((p) => p.type === 'year')?.value ?? '';
+    const month = parts.find((p) => p.type === 'month')?.value ?? '';
+    const day = parts.find((p) => p.type === 'day')?.value ?? '';
+    return `${year}-${month}-${day}`;
+  };
+
   const vendorsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Vendor', masters.Vendor ?? []) as MasterRecord[];
   const itemsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Item', masters.Item ?? []) as MasterRecord[];
   const budgetsForDeduction = filterByWorkflowApproval<Budget>(workflowV2Rules, 'Budget', budgets);
@@ -43,7 +56,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
     vendorId: '',
     vendorSiteId: '',
     transactionType: getItemTypesFromMasters(masters)[0]?.name ?? '',
-    validFrom: '',
+    validFrom: getTodayISTDate(),
     validTo: '',
     requiredDate: '',
     frequency: 'One-Time',
@@ -232,7 +245,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
   const resetForm = () => {
     setPrForm({
       entityName: masters.Entity?.[0]?.name || '',
-      vendorId: '', vendorSiteId: '', transactionType: getItemTypesFromMasters(masters)[0]?.name ?? '', validFrom: '', validTo: '', requiredDate: '',
+      vendorId: '', vendorSiteId: '', transactionType: getItemTypesFromMasters(masters)[0]?.name ?? '', validFrom: getTodayISTDate(), validTo: '', requiredDate: '',
       frequency: 'One-Time', department: '', subDepartment: '', paymentTerms: '',
       centerNames: [], items: [{ id: Math.random().toString(), itemName: '', desc: '', quantity: 1, rate: 0, amount: 0, remarks: '', coaCode: '' }],
       amount: 0, remarks: '', overallSummary: '', attachments: [],
