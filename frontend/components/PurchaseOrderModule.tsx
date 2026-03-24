@@ -21,6 +21,8 @@ import {
 import TransactionListFilterBar, { ListStatusQuick } from './TransactionListFilterBar';
 import SearchableSelect from './SearchableSelect';
 import { AlertCircle, Info, ShieldCheck, ShieldAlert } from 'lucide-react';
+import { apiGet } from '../api';
+import DocumentAuditLogModal from './DocumentAuditLogModal';
 
 const PO_LINE_GST_USE_HEADER = '__HEADER__' as const;
 
@@ -43,6 +45,16 @@ interface PurchaseOrderModuleProps {
 
 type ViewMode = 'PO' | 'GRN' | 'Invoice';
 
+type PoRemainingItem = {
+  itemName: string;
+  itemId: string | null;
+  orderedQty: number;
+  receivedQty: number;
+  leftQty: number;
+  rate: number;
+  center: string;
+};
+
 const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({ 
   masters, purchaseOrders, setPurchaseOrders, grns, setGrns, invoices, setInvoices, pendingPR, onPOCreated, currentUser, workflows, budgets, setBudgets, workflowV2Rules = []
 }) => {
@@ -56,8 +68,17 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
   const [selectedGRN, setSelectedGRN] = useState<GRN | null>(null);
 
   const [bulkUploadType, setBulkUploadType] = useState<'PO' | 'GRN' | 'Invoice' | null>(null);
+  const [showPoGrnItemModal, setShowPoGrnItemModal] = useState(false);
+  const [poForGrnSelection, setPoForGrnSelection] = useState<PurchaseOrder | null>(null);
+  const [poRemainingItems, setPoRemainingItems] = useState<PoRemainingItem[]>([]);
+  const [poReceiveQtyByKey, setPoReceiveQtyByKey] = useState<Record<string, number>>({});
+  const [poSelectedByKey, setPoSelectedByKey] = useState<Record<string, boolean>>({});
+  const [poRemainingLoading, setPoRemainingLoading] = useState(false);
+  const [poRemainingError, setPoRemainingError] = useState<string | null>(null);
+  const [showAuditModal, setShowAuditModal] = useState(false);
+  const [selectedAuditDoc, setSelectedAuditDoc] = useState<PurchaseOrder | GRN | Invoice | null>(null);
 
-  const [listStatusQuick, setListStatusQuick] = useState<ListStatusQuick>('all');
+  const [listStatusQuick, setListStatusQuick] = useState<ListStatusQuick>('pending');
   const [listDateFrom, setListDateFrom] = useState('');
   const [listDateTo, setListDateTo] = useState('');
   const [listVendorId, setListVendorId] = useState('');
@@ -72,8 +93,75 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
   const [colInvDetails, setColInvDetails] = useState('');
   const [colInvStatus, setColInvStatus] = useState('');
 
+  const addAuditEntry = <T extends PurchaseOrder | GRN | Invoice>(doc: T, action: string): T => ({
+    ...(doc as any),
+    workflowStepHistory: [
+      ...((doc as any).workflowStepHistory || []),
+      { action, userId: currentUser.id, at: new Date().toISOString(), stepIndex: doc.currentStepIndex }
+    ]
+  } as T);
+
+  const toDate = (value?: string) => {
+    if (!value) return null;
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return null;
+    d.setHours(0, 0, 0, 0);
+    return d;
+  };
+
+  const addMonthsSafe = (date: Date, months: number) => {
+    const d = new Date(date.getTime());
+    const day = d.getDate();
+    d.setMonth(d.getMonth() + months);
+    if (d.getDate() < day) d.setDate(0);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  };
+
+  const formatDate = (d: Date) => d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+
+  const getPoWindowInfo = (po: PurchaseOrder) => {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const vf = toDate(po.validFrom);
+    const vt = toDate(po.validTo);
+    if (!vf || !vt) {
+      return { canCreate: true, message: 'Delivery window: no validity range configured' };
+    }
+    if (now < vf) {
+      return { canCreate: false, message: `Contract validity starts on ${formatDate(vf)}` };
+    }
+    if (now > vt) {
+      return { canCreate: false, message: `Contract validity expired on ${formatDate(vt)}` };
+    }
+    const frequency = po.frequency || 'One-Time';
+    if (frequency === 'One-Time' || frequency === 'Monthly') {
+      return { canCreate: true, message: `Delivery window: ${formatDate(vf)} - ${formatDate(vt)} (${frequency})` };
+    }
+    const step = frequency === 'Quarterly' ? 3 : 12;
+    let start = new Date(vf.getTime());
+    let end = addMonthsSafe(start, step);
+    end.setDate(end.getDate() - 1);
+    while (end < now && start < vt) {
+      start = addMonthsSafe(start, step);
+      end = addMonthsSafe(start, step);
+      end.setDate(end.getDate() - 1);
+    }
+    if (end > vt) end = new Date(vt.getTime());
+    const inside = now >= start && now <= end;
+    if (inside) return { canCreate: true, message: `Delivery window: ${formatDate(start)} - ${formatDate(end)} (${frequency})` };
+    const nextStart = addMonthsSafe(start, step);
+    if (nextStart <= vt) {
+      let nextEnd = addMonthsSafe(nextStart, step);
+      nextEnd.setDate(nextEnd.getDate() - 1);
+      if (nextEnd > vt) nextEnd = new Date(vt.getTime());
+      return { canCreate: false, message: `Next delivery window: ${formatDate(nextStart)} - ${formatDate(nextEnd)}` };
+    }
+    return { canCreate: false, message: `Contract validity expired on ${formatDate(vt)}` };
+  };
+
   useEffect(() => {
-    setListStatusQuick('all');
+    setListStatusQuick('pending');
     setListDateFrom('');
     setListDateTo('');
     setListVendorId('');
@@ -102,7 +190,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     subDepartment: '',
     paymentTerms: '',
     centerNames: [],
-    items: [{ id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, remarks: '', centerName: '' }],
+    items: [{ id: Math.random().toString(), itemName: '', desc: '', quantity: 1, rate: 0, amount: 0, remarks: '', centerName: '' }],
     tds: 0,
     gst: 0,
     amount: 0,
@@ -217,7 +305,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     [poForm.items]
   );
 
-  const updateGrnItem = (itemId: string, field: 'quantity' | 'remarks' | 'gst', value: number | string) => {
+  const updateGrnItem = (itemId: string, field: 'quantity' | 'remarks' | 'gst' | 'desc', value: number | string) => {
     if (!selectedPO) return;
     const vendor = (masters.Vendor ?? []).find((v: any) => v.id === selectedPO.vendorId);
     const center = (masters.Center ?? []).find((c: any) => c.name === grnForm.location);
@@ -265,7 +353,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
           }
           return updated;
         }
-        return { ...i, remarks: String(value ?? '') };
+        return { ...i, [field]: String(value ?? '') };
       });
       const amount = items.reduce((sum, i) => sum + (Number(i.totalAmount) || 0), 0);
       return { ...prev, items, amount };
@@ -326,7 +414,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       ...prev,
       items: [
         ...(prev.items || []),
-        { id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, remarks: '', coaCode: '', centerName: '' },
+        { id: Math.random().toString(), itemName: '', desc: '', quantity: 1, rate: 0, amount: 0, remarks: '', coaCode: '', centerName: '' },
       ],
     }));
   };
@@ -437,8 +525,15 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     });
   }, [poForm.items]);
 
-  const updateInvoiceItem = (itemId: string, field: 'quantity' | 'gst' | 'tds', value: number) => {
+  const updateInvoiceItem = (itemId: string, field: 'quantity' | 'gst' | 'tds' | 'desc', value: number | string) => {
     if (!selectedGRN || !selectedPO) return;
+    if (field === 'desc') {
+      setInvoiceForm(prev => ({
+        ...prev,
+        items: (prev.items || []).map(i => i.id === itemId ? { ...i, desc: String(value ?? '') } : i)
+      }));
+      return;
+    }
     const vendor = (masters.Vendor ?? []).find((v: any) => v.id === selectedPO.vendorId);
     const center = (masters.Center ?? []).find((c: any) => c.name === invoiceForm.location);
     const isIntraState = vendor && center && (vendor as any).state === (center as any).state;
@@ -446,11 +541,11 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     setInvoiceForm(prev => {
       const items = (prev.items || []).map(i => {
         if (i.id !== itemId) return i;
-        const qty = field === 'quantity' ? value : (Number(i.quantity) || 0);
+        const qty = field === 'quantity' ? Number(value) : (Number(i.quantity) || 0);
         const rate = Number(i.rate) || 0;
         const base = qty * rate;
-        const gstPercent = field === 'gst' ? value : (i.gst ?? prev.gst ?? 0);
-        const tdsPercent = field === 'tds' ? value : (i.tds ?? prev.tds ?? 0);
+        const gstPercent = field === 'gst' ? Number(value) : (i.gst ?? prev.gst ?? 0);
+        const tdsPercent = field === 'tds' ? Number(value) : (i.tds ?? prev.tds ?? 0);
         const gstAmount = base * (gstPercent / 100);
         const tdsAmount = base * (tdsPercent / 100);
         const totalAmount = base + gstAmount - tdsAmount;
@@ -472,7 +567,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
   };
 
   const downloadTemplate = (type: 'PO' | 'GRN' | 'Invoice') => {
-    const headers = type === 'PO' ? 'Item Name,Qty,Rate,Center,Remarks' : 'Item Name,Qty,Rate,Remarks';
+    const headers = type === 'PO' ? 'Item Name,Desc,Qty,Rate,Center,Remarks' : 'Item Name,Desc,Qty,Rate,Remarks';
     const blob = new Blob([headers], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -495,6 +590,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
         const data = results.data as any[];
         const newItems: ItemLine[] = data.map((row: any) => {
           const itemName = row['Item Name'] || row['itemName'] || '';
+          const desc = row['Desc'] || row['desc'] || row['Description'] || row['description'] || '';
           const qty = parseFloat(row['Qty'] || row['quantity'] || '0');
           const rate = parseFloat(row['Rate'] || row['rate'] || '0');
           const centerName = row['Center'] || row['center'] || row['Centre'] || '';
@@ -508,6 +604,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
           return {
             id: Math.random().toString(),
             itemName,
+            desc,
             quantity: qty,
             rate,
             amount: base,
@@ -586,7 +683,8 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       status: budgetCheck.ok ? 'Pending' : 'Budget Hold',
       currentStepIndex: 0,
       createdAt: new Date().toISOString(),
-      attachments: poForm.attachments || []
+      attachments: poForm.attachments || [],
+      workflowStepHistory: [{ action: 'submit', userId: currentUser.id, at: new Date().toISOString(), stepIndex: 0 }]
     };
     setPurchaseOrders([...purchaseOrders, newPO]);
     setShowForm(false);
@@ -631,8 +729,137 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     }));
   };
 
+  const poRemainingKey = (it: PoRemainingItem, idx: number) => `${it.itemId || it.itemName || 'item'}::${idx}`;
+
+  const openPoGrnSelectionModal = async (po: PurchaseOrder) => {
+    const windowInfo = getPoWindowInfo(po);
+    if (!windowInfo.canCreate) {
+      alert(windowInfo.message);
+      return;
+    }
+    setPoRemainingLoading(true);
+    setPoRemainingError(null);
+    setPoForGrnSelection(po);
+    try {
+      const res = await apiGet<{ items: PoRemainingItem[] }>(`purchase-orders/${po.id}/remaining-quantities`);
+      const items = Array.isArray(res?.items) ? res.items : [];
+      const receiveDefaults: Record<string, number> = {};
+      const selectedDefaults: Record<string, boolean> = {};
+      items.forEach((it, idx) => {
+        const key = poRemainingKey(it, idx);
+        receiveDefaults[key] = Number(it.leftQty) || 0;
+        selectedDefaults[key] = (Number(it.leftQty) || 0) > 0;
+      });
+      setPoRemainingItems(items);
+      setPoReceiveQtyByKey(receiveDefaults);
+      setPoSelectedByKey(selectedDefaults);
+      setShowPoGrnItemModal(true);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed to load remaining quantities';
+      setPoRemainingError(msg);
+      alert(msg);
+    } finally {
+      setPoRemainingLoading(false);
+    }
+  };
+
+  const closePoGrnSelectionModal = () => {
+    setShowPoGrnItemModal(false);
+    setPoForGrnSelection(null);
+    setPoRemainingItems([]);
+    setPoReceiveQtyByKey({});
+    setPoSelectedByKey({});
+    setPoRemainingError(null);
+  };
+
+  const proceedPoGrnSelection = () => {
+    if (!poForGrnSelection) return;
+    const selectedRows = poRemainingItems
+      .map((it, idx) => ({ it, idx, key: poRemainingKey(it, idx) }))
+      .filter((r) => poSelectedByKey[r.key]);
+    if (selectedRows.length === 0) {
+      alert('Select at least one item for GRN.');
+      return;
+    }
+    const poItems = poForGrnSelection.items || [];
+    const prepared: ItemLine[] = [];
+    for (const row of selectedRows) {
+      const receiveQty = Number(poReceiveQtyByKey[row.key] ?? 0);
+      const leftQty = Number(row.it.leftQty) || 0;
+      if (receiveQty <= 0) {
+        alert(`Receive qty must be greater than 0 for ${row.it.itemName}.`);
+        return;
+      }
+      if (receiveQty > leftQty) {
+        alert(`Cannot receive more than remaining quantity. Left qty for ${row.it.itemName} is ${leftQty}.`);
+        return;
+      }
+      const baseFromPo = poItems.find((i) => (row.it.itemId && i.id === row.it.itemId) || i.itemName === row.it.itemName);
+      const rate = Number(baseFromPo?.rate ?? row.it.rate) || 0;
+      prepared.push({
+        ...(baseFromPo || {
+          id: row.it.itemId || Math.random().toString(),
+          itemName: row.it.itemName,
+          desc: '',
+          rate,
+          remarks: '',
+          centerName: row.it.center || '',
+        }),
+        id: row.it.itemId || baseFromPo?.id || Math.random().toString(),
+        quantity: receiveQty,
+        amount: receiveQty * rate,
+        rate,
+        desc: baseFromPo?.desc ?? '',
+        remarks: baseFromPo?.remarks ?? '',
+        centerName: baseFromPo?.centerName || row.it.center || '',
+        poLeftQty: leftQty,
+        sourceItemId: row.it.itemId || baseFromPo?.id,
+      });
+    }
+
+    setSelectedPO(poForGrnSelection);
+    setGrnForm({
+      entityName: poForGrnSelection.entityName,
+      purchaseOrderId: poForGrnSelection.id,
+      vendorSiteId: poForGrnSelection.vendorSiteId || '',
+      shippingAddressId: poForGrnSelection.shippingAddressId || '',
+      billingAddressId: poForGrnSelection.billingAddressId || '',
+      location: (poForGrnSelection.centerNames && poForGrnSelection.centerNames[0]) || '',
+      department: poForGrnSelection.department || '',
+      subDepartment: poForGrnSelection.subDepartment || '',
+      remarks: poForGrnSelection.remarks || '',
+      overallSummary: poForGrnSelection.overallSummary || '',
+      invoiceNumber: '',
+      invoiceDate: '',
+      tds: poForGrnSelection.tds ?? 0,
+      gst: poForGrnSelection.gst ?? 0,
+      items: prepared,
+      amount: 0,
+      attachments: [],
+    });
+    setShowForm(true);
+    closePoGrnSelectionModal();
+  };
+
   const handleCreateGRN = () => {
     if (!selectedPO) return;
+    const items = grnForm.items || [];
+    if (items.length === 0) {
+      alert('Select at least one item for GRN.');
+      return;
+    }
+    for (const it of items) {
+      const qty = Number(it.quantity) || 0;
+      const max = Number(it.poLeftQty ?? 0) || 0;
+      if (qty <= 0) {
+        alert('Quantity must be greater than 0.');
+        return;
+      }
+      if (max > 0 && qty > max) {
+        alert(`Cannot exceed remaining quantity. Left qty for ${it.itemName} is ${max}.`);
+        return;
+      }
+    }
     const newGRN: GRN = {
       ...grnForm as GRN,
       id: `GRN-${Math.floor(Math.random() * 10000)}`,
@@ -642,7 +869,8 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       currentStepIndex: 0,
       createdAt: new Date().toISOString(),
       createdBy: currentUser.id,
-      attachments: grnForm.attachments || []
+      attachments: grnForm.attachments || [],
+      workflowStepHistory: [{ action: 'submit', userId: currentUser.id, at: new Date().toISOString(), stepIndex: 0 }]
     };
     setGrns([...grns, newGRN]);
     setShowForm(false);
@@ -660,7 +888,8 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       currentStepIndex: 0,
       createdAt: new Date().toISOString(),
       createdBy: currentUser.id,
-      attachments: invoiceForm.attachments || []
+      attachments: invoiceForm.attachments || [],
+      workflowStepHistory: [{ action: 'submit', userId: currentUser.id, at: new Date().toISOString(), stepIndex: 0 }]
     };
     setInvoices([...invoices, newInvoice]);
     setShowForm(false);
@@ -672,7 +901,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       entityName: masters.Entity?.[0]?.name || '',
       vendorId: '', vendorSiteId: '', transactionType: getItemTypesFromMasters(masters)[0]?.name ?? '', validFrom: '', validTo: '',
       frequency: 'One-Time', department: '', subDepartment: '', paymentTerms: '',
-      centerNames: [], items: [{ id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, remarks: '', coaCode: '', centerName: '' }], // line gst omitted = follow header
+      centerNames: [], items: [{ id: Math.random().toString(), itemName: '', desc: '', quantity: 1, rate: 0, amount: 0, remarks: '', coaCode: '', centerName: '' }], // line gst omitted = follow header
       tds: 0, gst: 0, amount: 0, remarks: '', overallSummary: '', attachments: [],
       shippingAddressId: '', billingAddressId: '',
       isUnbudgeted: false, unbudgetedJustification: ''
@@ -684,7 +913,29 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
   };
 
   const poGrns = grns.filter(g => g.purchaseOrderId);
+  const poInvoices = invoices.filter((inv) => {
+    const g = grns.find((x) => x.id === inv.grnId);
+    return !!g?.purchaseOrderId;
+  });
   const noRateContracts: RateContract[] = [];
+
+  const isPoFullyReceived = (po: PurchaseOrder) => {
+    const receivedByKey = new Map<string, number>();
+    poGrns
+      .filter((g) => g.purchaseOrderId === po.id)
+      .forEach((g) => {
+        (g.items || []).forEach((it, idx) => {
+          const key = `${it.sourceItemId || it.id || `${String(it.itemName || '').toLowerCase()}::${idx}`}`;
+          receivedByKey.set(key, (receivedByKey.get(key) || 0) + (Number(it.quantity) || 0));
+        });
+      });
+    return (po.items || []).every((it, idx) => {
+      const key = `${it.id || `${String(it.itemName || '').toLowerCase()}::${idx}`}`;
+      const ordered = Number(it.quantity) || 0;
+      const received = receivedByKey.get(key) || 0;
+      return received >= ordered;
+    });
+  };
 
   const vendorOptionsForList = useMemo(
     () => vendorsForDropdown.map((v) => ({ id: v.id, name: v.name })),
@@ -695,6 +946,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     () => ({
       approved: purchaseOrders.filter((p) => p.status === 'Approved').length,
       pending: purchaseOrders.filter((p) => p.status === 'Pending').length,
+      rejected: purchaseOrders.filter((p) => p.status === 'Rejected').length,
     }),
     [purchaseOrders]
   );
@@ -702,15 +954,17 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     () => ({
       approved: poGrns.filter((g) => g.status === 'Approved').length,
       pending: poGrns.filter((g) => g.status === 'Pending').length,
+      rejected: poGrns.filter((g) => g.status === 'Rejected').length,
     }),
     [poGrns]
   );
   const invListCounts = useMemo(
     () => ({
-      approved: invoices.filter((i) => i.status === 'Approved').length,
-      pending: invoices.filter((i) => i.status === 'Pending').length,
+      approved: poInvoices.filter((i) => i.status === 'Approved').length,
+      pending: poInvoices.filter((i) => i.status === 'Pending').length,
+      rejected: poInvoices.filter((i) => i.status === 'Rejected').length,
     }),
-    [invoices]
+    [poInvoices]
   );
 
   const filteredPurchaseOrders = useMemo(() => {
@@ -743,7 +997,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
   }, [poGrns, purchaseOrders, masters, listDateFrom, listDateTo, listVendorId, listStatusQuick, colGrnId, colGrnDetails, colGrnStatus]);
 
   const filteredPoInvoices = useMemo(() => {
-    return invoices.filter((inv) => {
+    return poInvoices.filter((inv) => {
       if (!inCreatedAtRange(inv.createdAt, listDateFrom, listDateTo)) return false;
       const vid = getPoInvoiceVendorId(inv, grns, noRateContracts, purchaseOrders, masters);
       if (!matchesVendorFilter(vid, listVendorId)) return false;
@@ -754,7 +1008,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       if (!textIncludes(inv.status, colInvStatus)) return false;
       return true;
     });
-  }, [invoices, grns, purchaseOrders, masters, listDateFrom, listDateTo, listVendorId, listStatusQuick, colInvId, colInvDetails, colInvStatus]);
+  }, [poInvoices, grns, purchaseOrders, masters, listDateFrom, listDateTo, listVendorId, listStatusQuick, colInvId, colInvDetails, colInvStatus]);
 
   const isGrnReadOnly = !!grnForm.id && !(grnForm.status === 'Rejected' && grnForm.createdBy === currentUser.id);
 
@@ -849,7 +1103,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
         (w.maxAmount == null || Number(po.amount) <= Number(w.maxAmount))
       );
       if (!rule || po.currentStepIndex >= rule.approvalChain.length - 1) return po;
-      return { ...po, currentStepIndex: po.currentStepIndex + 1 };
+      return addAuditEntry({ ...po, currentStepIndex: po.currentStepIndex + 1 }, 'completeReview');
     }));
   };
 
@@ -865,7 +1119,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
         (w.maxAmount == null || Number(grn.amount) <= Number(w.maxAmount))
       );
       if (!rule || grn.currentStepIndex >= rule.approvalChain.length - 1) return grn;
-      return { ...grn, currentStepIndex: grn.currentStepIndex + 1 };
+      return addAuditEntry({ ...grn, currentStepIndex: grn.currentStepIndex + 1 }, 'completeReview');
     }));
   };
 
@@ -881,7 +1135,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
         (w.maxAmount == null || Number(inv.amount) <= Number(w.maxAmount))
       );
       if (!rule || inv.currentStepIndex >= rule.approvalChain.length - 1) return inv;
-      return { ...inv, currentStepIndex: inv.currentStepIndex + 1 };
+      return addAuditEntry({ ...inv, currentStepIndex: inv.currentStepIndex + 1 }, 'completeReview');
     }));
   };
 
@@ -903,13 +1157,13 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
         const budgetCheck = checkBudget(po);
         if (!budgetCheck.ok) {
           alert(`Cannot approve PO: ${budgetCheck.errors?.join('\n')}`);
-          return { ...po, status: 'Budget Hold' };
+          return addAuditEntry({ ...po, status: 'Budget Hold' }, 'approve');
         }
         deductBudget(po);
-        return { ...po, status: 'Approved' };
+        return addAuditEntry({ ...po, status: 'Approved' }, 'approve');
       }
 
-      return { ...po, currentStepIndex: po.currentStepIndex + 1 };
+      return addAuditEntry({ ...po, currentStepIndex: po.currentStepIndex + 1 }, 'approve');
     }));
   };
 
@@ -934,7 +1188,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     if (po && po.status === 'Approved') {
       creditBudget(po);
     }
-    setPurchaseOrders(purchaseOrders.map(po => po.id === id ? { ...po, status: 'Pending', currentStepIndex: 0 } : po));
+    setPurchaseOrders(purchaseOrders.map(po => po.id === id ? addAuditEntry({ ...po, status: 'Pending', currentStepIndex: 0 }, 'amend') : po));
     alert('PO status reset to Pending for amendment. Budget has been credited back and will be re-validated upon re-approval.');
   };
 
@@ -952,10 +1206,10 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       );
 
       if (!rule || grn.currentStepIndex >= rule.approvalChain.length - 1) {
-        return { ...grn, status: 'Approved' };
+        return addAuditEntry({ ...grn, status: 'Approved' }, 'approve');
       }
 
-      return { ...grn, currentStepIndex: grn.currentStepIndex + 1 };
+      return addAuditEntry({ ...grn, currentStepIndex: grn.currentStepIndex + 1 }, 'approve');
     }));
   };
 
@@ -978,10 +1232,10 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       );
 
       if (!rule || inv.currentStepIndex >= rule.approvalChain.length - 1) {
-        return { ...inv, status: 'Approved' };
+        return addAuditEntry({ ...inv, status: 'Approved' }, 'approve');
       }
 
-      return { ...inv, currentStepIndex: inv.currentStepIndex + 1 };
+      return addAuditEntry({ ...inv, currentStepIndex: inv.currentStepIndex + 1 }, 'approve');
     }));
   };
 
@@ -1010,6 +1264,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
           <TransactionListFilterBar
             approvedCount={viewMode === 'PO' ? poListCounts.approved : viewMode === 'GRN' ? grnListCounts.approved : invListCounts.approved}
             pendingCount={viewMode === 'PO' ? poListCounts.pending : viewMode === 'GRN' ? grnListCounts.pending : invListCounts.pending}
+            rejectedCount={viewMode === 'PO' ? poListCounts.rejected : viewMode === 'GRN' ? grnListCounts.rejected : invListCounts.rejected}
             statusQuick={listStatusQuick}
             onStatusQuick={setListStatusQuick}
             dateFrom={listDateFrom}
@@ -1118,7 +1373,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* PO Form Fields */}
-            {!selectedPO && (
+            {!selectedPO && !selectedGRN && (
               <>
                 <div className="space-y-2">
                   <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Entity</label>
@@ -1368,7 +1623,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                   <div className="space-y-6">
                     {poForm.items?.map((item, index) => (
                       <div key={item.id} className="bg-slate-50 p-6 rounded-3xl border border-slate-100 space-y-4">
-                        <div className="grid grid-cols-12 gap-2 items-end">
+                        <div className="grid grid-cols-[repeat(14,minmax(0,1fr))] gap-2 items-end">
                           <div className="col-span-2 space-y-1 min-w-0">
                             <SearchableSelect
                               label="Item Name"
@@ -1376,6 +1631,16 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                               value={item.itemName ?? ''}
                               onChange={(v) => updateItem(item.id, 'itemName', v)}
                               placeholder="Select Item"
+                            />
+                          </div>
+                          <div className="col-span-2 space-y-1 min-w-0">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Desc</label>
+                            <input
+                              type="text"
+                              placeholder="Description"
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                              value={item.desc ?? ''}
+                              onChange={e => updateItem(item.id, 'desc', e.target.value)}
                             />
                           </div>
                           <div className="col-span-1 space-y-1">
@@ -1676,13 +1941,24 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                   </div>
                   <div className="space-y-3">
                     {(grnForm.items || []).map((grnItem) => {
-                      const poItem = selectedPO.items?.find((i: ItemLine) => i.id === grnItem.id);
-                      const maxQty = poItem ? Number(poItem.quantity) || 0 : 0;
+                      const poItem = selectedPO.items?.find((i: ItemLine) => i.id === grnItem.id || i.id === grnItem.sourceItemId);
+                      const maxQty = Number(grnItem.poLeftQty ?? (poItem ? Number(poItem.quantity) : 0)) || 0;
                       return (
-                        <div key={grnItem.id} className="grid grid-cols-12 gap-2 items-end bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                        <div key={grnItem.id} className="grid grid-cols-[repeat(14,minmax(0,1fr))] gap-2 items-end bg-slate-50 p-4 rounded-2xl border border-slate-100">
                           <div className="col-span-2 space-y-1 min-w-0">
                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Item Name</label>
                             <div className="text-sm font-bold text-slate-700 truncate">{grnItem.itemName}</div>
+                          </div>
+                          <div className="col-span-2 space-y-1 min-w-0">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Desc</label>
+                            <input
+                              type="text"
+                              placeholder="Description"
+                              className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold bg-white disabled:opacity-50"
+                              value={grnItem.desc ?? ''}
+                              onChange={e => updateGrnItem(grnItem.id, 'desc', e.target.value)}
+                              disabled={!!grnForm.id}
+                            />
                           </div>
                           <div className="col-span-1 space-y-1">
                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Qty</label>
@@ -1694,13 +1970,20 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                               onChange={e => {
                                 const qty = Number(e.target.value);
                                 if (maxQty > 0 && qty > maxQty) {
-                                  alert(`Quantity (${qty}) cannot be greater than PO quantity (${maxQty})`);
+                                  alert(`Cannot exceed remaining quantity of ${maxQty}`);
                                   return;
                                 }
                                 updateGrnItem(grnItem.id, 'quantity', qty);
                               }}
                               disabled={!!grnForm.id}
                             />
+                            {maxQty > 0 && (Number(grnItem.quantity) || 0) > maxQty && (
+                              <div className="text-[9px] font-bold text-rose-600">Cannot exceed remaining quantity of {maxQty}</div>
+                            )}
+                          </div>
+                          <div className="col-span-1 space-y-1">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">PO Left Qty</label>
+                            <div className="text-sm font-black text-indigo-700">{maxQty}</div>
                           </div>
                           <div className="col-span-1 space-y-1">
                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Rate (INR)</label>
@@ -1789,6 +2072,13 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
             {/* Invoice Form Fields */}
             {selectedGRN && (
               <>
+                {(() => {
+                  const invoiceVendorId =
+                    selectedPO?.vendorId ||
+                    purchaseOrders.find((p) => p.id === selectedGRN.purchaseOrderId)?.vendorId ||
+                    '';
+                  return (
+                    <>
                 <div className="col-span-2 bg-emerald-50 p-4 rounded-2xl border border-emerald-100 mb-4">
                   <p className="text-sm font-bold text-emerald-900">Auto-populated from {selectedGRN.id}</p>
                   <div className="grid grid-cols-3 gap-4 mt-2 text-xs">
@@ -1804,9 +2094,10 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
                     value={invoiceForm.vendorSiteId}
                     onChange={e => setInvoiceForm({ ...invoiceForm, vendorSiteId: e.target.value })}
+                    disabled={!invoiceVendorId}
                   >
                     <option value="">Select Vendor Site</option>
-                    {(masters['Vendor Site'] ?? []).filter(s => s.vendorId === selectedPO.vendorId).map(s => (
+                    {(masters['Vendor Site'] ?? []).filter(s => s.vendorId === invoiceVendorId).map(s => (
                       <option key={s.id} value={s.id}>{s.name} ({s.code})</option>
                     ))}
                   </select>
@@ -1876,6 +2167,16 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                           <div className="col-span-2 space-y-1 min-w-0">
                             <label className="text-[10px] font-black text-slate-400 uppercase">Item Name</label>
                             <div className="text-sm font-bold text-slate-700 truncate">{invItem.itemName}</div>
+                          </div>
+                          <div className="col-span-1 space-y-1 min-w-0">
+                            <label className="text-[10px] font-black text-slate-400 uppercase">Desc</label>
+                            <input
+                              type="text"
+                              placeholder="Description"
+                              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                              value={invItem.desc ?? ''}
+                              onChange={e => updateInvoiceItem(grnItem.id, 'desc', e.target.value)}
+                            />
                           </div>
                           <div className="col-span-1 space-y-1">
                             <label className="text-[10px] font-black text-slate-400 uppercase">Qty</label>
@@ -1973,26 +2274,18 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                     </div>
                   </div>
                 </div>
-                <div className="col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
-                  <div className="space-y-2">
-                    <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Remarks</label>
-                    <textarea
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium min-h-[80px]"
-                      value={invoiceForm.remarks ?? ''}
-                      onChange={e => setInvoiceForm({ ...invoiceForm, remarks: e.target.value })}
-                      placeholder="Header remarks (from GRN by default; editable)"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Overall summary</label>
-                    <textarea
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium min-h-[80px]"
-                      value={invoiceForm.overallSummary ?? ''}
-                      onChange={e => setInvoiceForm({ ...invoiceForm, overallSummary: e.target.value })}
-                      placeholder="Overall summary (from GRN by default; editable)"
-                    />
-                  </div>
+                <div className="space-y-2 col-span-2 mt-2">
+                  <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Overall summary</label>
+                  <textarea
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium min-h-[80px]"
+                    value={invoiceForm.overallSummary ?? ''}
+                    onChange={e => setInvoiceForm({ ...invoiceForm, overallSummary: e.target.value })}
+                    placeholder="Overall summary (from GRN by default; editable)"
+                  />
                 </div>
+                    </>
+                  );
+                })()}
               </>
             )}
 
@@ -2097,13 +2390,17 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex flex-col space-y-1">
-                      <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider w-fit ${
+                      <button
+                        onClick={() => { setSelectedAuditDoc(po); setShowAuditModal(true); }}
+                        className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider w-fit ${
                         po.status === 'Approved' ? 'bg-emerald-100 text-emerald-700' : 
                         po.status === 'Budget Hold' ? 'bg-rose-100 text-rose-700' :
                         'bg-amber-100 text-amber-700'
-                      }`}>
+                        }`}
+                        title="View audit log"
+                      >
                         {po.status}
-                      </span>
+                      </button>
                       {po.status === 'Pending' && (
                         <div className="text-[10px] font-bold text-slate-400">
                           Step {po.currentStepIndex + 1}
@@ -2127,52 +2424,41 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                         )}
                         {po.status === 'Approved' && (
                           <>
-                            <button 
-                              onClick={() => {
-                                setSelectedPO(po);
-                                setGrnForm({
-                                  entityName: po.entityName,
-                                  purchaseOrderId: po.id,
-                                  vendorSiteId: po.vendorSiteId || '',
-                                  shippingAddressId: po.shippingAddressId || '',
-                                  billingAddressId: po.billingAddressId || '',
-                                  location: (po.centerNames && po.centerNames[0]) || '',
-                                  department: po.department || '',
-                                  subDepartment: po.subDepartment || '',
-                                  remarks: po.remarks || '',
-                                  overallSummary: po.overallSummary || '',
-                                  invoiceNumber: '',
-                                  invoiceDate: '',
-                                  tds: po.tds ?? 0,
-                                  gst: po.gst ?? 0,
-                                  items: (po.items || []).map(item => {
-                                    const qty = item.quantity ?? 1;
-                                    const rate = Number(item.rate) || 0;
-                                    return {
-                                      ...item,
-                                      quantity: qty,
-                                      amount: qty * rate,
-                                      remarks: item.remarks ?? ''
-                                    };
-                                  }),
-                                  amount: 0,
-                                  attachments: []
-                                });
-                                setShowForm(true);
-                              }}
-                              className="text-xs font-black text-indigo-600 hover:underline"
-                            >
-                              Create GRN
-                            </button>
-                            <button 
-                              onClick={() => amendPO(po.id)}
-                              className="text-xs font-black text-slate-600 hover:underline"
-                            >
-                              Amend
-                            </button>
+                            {(() => {
+                              const fullyReceived = isPoFullyReceived(po);
+                              const windowInfo = getPoWindowInfo(po);
+                              const disabled = fullyReceived || !windowInfo.canCreate;
+                              return (
+                                <button
+                                  onClick={() => {
+                                    if (disabled) return;
+                                    openPoGrnSelectionModal(po);
+                                  }}
+                                  disabled={disabled || poRemainingLoading}
+                                  className={`text-xs font-black hover:underline ${disabled ? 'text-slate-400 cursor-not-allowed' : 'text-indigo-600'}`}
+                                  title={disabled ? (fullyReceived ? 'All items fully received' : windowInfo.message) : 'Create GRN'}
+                                >
+                                  {fullyReceived ? 'Fully Received' : 'Create GRN'}
+                                </button>
+                              );
+                            })()}
+                            {!isPoFullyReceived(po) && (
+                              <button 
+                                onClick={() => amendPO(po.id)}
+                                className="text-xs font-black text-slate-600 hover:underline"
+                              >
+                                Amend
+                              </button>
+                            )}
                           </>
                         )}
                       </div>
+                      {po.status === 'Approved' && (
+                        <div className="text-[10px] font-bold text-slate-400 flex items-center gap-1">
+                          <Info className="w-3 h-3" />
+                          {getPoWindowInfo(po).message}
+                        </div>
+                      )}
                       
                       {/* Budget Visibility during Approval */}
                       {po.status === 'Pending' && !po.isUnbudgeted && (
@@ -2214,11 +2500,15 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex flex-col space-y-1">
-                        <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider w-fit ${
+                        <button
+                          onClick={() => { setSelectedAuditDoc(grn); setShowAuditModal(true); }}
+                          className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider w-fit ${
                           grn.status === 'Approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
-                        }`}>
+                          }`}
+                          title="View audit log"
+                        >
                           {grn.status}
-                        </span>
+                        </button>
                         {grn.status === 'Pending' && (
                           <div className="text-[10px] font-bold text-slate-400">
                             Step {grn.currentStepIndex + 1}
@@ -2238,7 +2528,8 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                           <>
                             <button 
                               onClick={() => { 
-                                setSelectedPO(po || null); 
+                                const resolvedPO = po || purchaseOrders.find(p => p.id === grn.purchaseOrderId) || null;
+                                setSelectedPO(resolvedPO); 
                                 setSelectedGRN(grn);
                                 setInvoiceForm({
                                   entityName: grn.entityName,
@@ -2284,11 +2575,15 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex flex-col space-y-1">
-                      <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider w-fit ${
+                      <button
+                        onClick={() => { setSelectedAuditDoc(inv); setShowAuditModal(true); }}
+                        className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider w-fit ${
                         inv.status === 'Approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
-                      }`}>
+                        }`}
+                        title="View audit log"
+                      >
                         {inv.status}
-                      </span>
+                      </button>
                       {inv.status === 'Pending' && (
                         <div className="text-[10px] font-bold text-slate-400">
                           Step {inv.currentStepIndex + 1}
@@ -2319,7 +2614,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
 
               {((viewMode === 'PO' && purchaseOrders.length === 0) ||
                 (viewMode === 'GRN' && poGrns.length === 0) ||
-                (viewMode === 'Invoice' && invoices.length === 0)) && (
+                (viewMode === 'Invoice' && poInvoices.length === 0)) && (
                 <tr>
                   <td colSpan={5} className="px-6 py-12 text-center text-slate-400 font-medium">
                     No records found for {viewMode}
@@ -2340,7 +2635,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                   </td>
                 </tr>
               )}
-              {viewMode === 'Invoice' && invoices.length > 0 && filteredPoInvoices.length === 0 && (
+              {viewMode === 'Invoice' && poInvoices.length > 0 && filteredPoInvoices.length === 0 && (
                 <tr>
                   <td colSpan={5} className="px-6 py-12 text-center text-slate-500 text-sm font-bold">
                     No records match your filters.
@@ -2351,6 +2646,94 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
           </table>
         </div>
       )}
+
+      {showPoGrnItemModal && poForGrnSelection && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[1px] flex items-center justify-center p-4">
+          <div className="w-full max-w-6xl bg-white rounded-3xl border border-slate-200 shadow-2xl max-h-[90vh] overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-200 flex items-start justify-between">
+              <div>
+                <h3 className="text-lg font-black text-slate-900">Select Items for GRN</h3>
+                <p className="text-xs font-bold text-slate-500 mt-1">PO: {poForGrnSelection.id}</p>
+                <p className="text-xs font-bold text-indigo-600 mt-1 flex items-center gap-1"><Info className="w-3 h-3" />{getPoWindowInfo(poForGrnSelection).message}</p>
+              </div>
+              <button onClick={closePoGrnSelectionModal} className="text-slate-400 hover:text-slate-600 font-black">✕</button>
+            </div>
+            <div className="p-6 overflow-auto max-h-[65vh]">
+              {poRemainingLoading && <div className="text-sm font-bold text-slate-500">Loading remaining quantities...</div>}
+              {poRemainingError && <div className="text-sm font-bold text-rose-600">{poRemainingError}</div>}
+              {!poRemainingLoading && !poRemainingError && (
+                <table className="w-full table-fixed border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-y border-slate-200">
+                      <th className="px-2 py-2 text-left text-[10px] font-black text-slate-500 uppercase">Select</th>
+                      <th className="px-2 py-2 text-left text-[10px] font-black text-slate-500 uppercase">Item Name</th>
+                      <th className="px-2 py-2 text-left text-[10px] font-black text-slate-500 uppercase">Ordered Qty</th>
+                      <th className="px-2 py-2 text-left text-[10px] font-black text-slate-500 uppercase">Received Qty</th>
+                      <th className="px-2 py-2 text-left text-[10px] font-black text-slate-500 uppercase">Left Qty</th>
+                      <th className="px-2 py-2 text-left text-[10px] font-black text-slate-500 uppercase">Receive Qty</th>
+                      <th className="px-2 py-2 text-left text-[10px] font-black text-slate-500 uppercase">Center</th>
+                      <th className="px-2 py-2 text-left text-[10px] font-black text-slate-500 uppercase">Rate</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {poRemainingItems.map((it, idx) => {
+                      const key = poRemainingKey(it, idx);
+                      const left = Number(it.leftQty) || 0;
+                      const selected = !!poSelectedByKey[key];
+                      const receive = Number(poReceiveQtyByKey[key] ?? 0);
+                      const invalid = selected && (receive <= 0 || receive > left);
+                      return (
+                        <tr key={key} className={`border-b border-slate-100 ${left <= 0 ? 'bg-slate-50 opacity-70' : ''}`}>
+                          <td className="px-2 py-2">
+                            <input
+                              type="checkbox"
+                              checked={selected}
+                              disabled={left <= 0}
+                              onChange={(e) => setPoSelectedByKey((prev) => ({ ...prev, [key]: e.target.checked }))}
+                            />
+                          </td>
+                          <td className="px-2 py-2 text-sm font-bold text-slate-800">
+                            {it.itemName} {left <= 0 && <span className="text-[10px] text-slate-400 ml-1">Fully received</span>}
+                          </td>
+                          <td className="px-2 py-2 text-sm font-bold text-slate-700">{it.orderedQty}</td>
+                          <td className="px-2 py-2 text-sm font-bold text-slate-700">{it.receivedQty}</td>
+                          <td className="px-2 py-2 text-sm font-black text-indigo-700">{left}</td>
+                          <td className="px-2 py-2">
+                            <input
+                              type="number"
+                              min={0}
+                              max={left}
+                              disabled={left <= 0}
+                              className={`w-24 border rounded-lg px-2 py-1 text-sm font-bold ${invalid ? 'border-rose-500' : 'border-slate-200'}`}
+                              value={receive}
+                              onChange={(e) => setPoReceiveQtyByKey((prev) => ({ ...prev, [key]: Number(e.target.value) }))}
+                            />
+                            {invalid && <div className="text-[10px] text-rose-600 font-bold mt-1">Must be 1 to {left}</div>}
+                          </td>
+                          <td className="px-2 py-2 text-sm font-bold text-slate-700">{it.center || '-'}</td>
+                          <td className="px-2 py-2 text-sm font-bold text-slate-700">₹{(Number(it.rate) || 0).toFixed(2)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            <div className="px-6 py-4 border-t border-slate-200 flex justify-end gap-3">
+              <button onClick={closePoGrnSelectionModal} className="px-5 py-2 rounded-xl font-black text-slate-600 hover:bg-slate-100">Cancel</button>
+              <button onClick={proceedPoGrnSelection} className="px-5 py-2 rounded-xl font-black text-white bg-indigo-600 hover:bg-indigo-700">Proceed to GRN</button>
+            </div>
+          </div>
+        </div>
+      )}
+      <DocumentAuditLogModal
+        isOpen={showAuditModal}
+        onClose={() => setShowAuditModal(false)}
+        title={selectedAuditDoc ? `Audit Log - ${selectedAuditDoc.id}` : 'Audit Log'}
+        status={selectedAuditDoc?.status}
+        history={(selectedAuditDoc as any)?.workflowStepHistory || []}
+        users={[currentUser]}
+      />
     </div>
   );
 };

@@ -18,6 +18,7 @@ import {
 } from '../utils/transactionListFilters';
 import MultiSelect from './MultiSelect';
 import TransactionListFilterBar, { ListStatusQuick } from './TransactionListFilterBar';
+import DocumentAuditLogModal from './DocumentAuditLogModal';
 
 interface DirectInvoiceModuleProps {
   masters: Record<MasterType, MasterRecord[]>;
@@ -36,7 +37,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
   const budgetsForDeduction = filterByWorkflowApproval<Budget>(workflowV2Rules, 'Budget', budgets);
   const [showForm, setShowForm] = useState(false);
 
-  const [listStatusQuick, setListStatusQuick] = useState<ListStatusQuick>('all');
+  const [listStatusQuick, setListStatusQuick] = useState<ListStatusQuick>('pending');
   const [listDateFrom, setListDateFrom] = useState('');
   const [listDateTo, setListDateTo] = useState('');
   const [listVendorId, setListVendorId] = useState('');
@@ -45,6 +46,16 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
   const [colInvDate, setColInvDate] = useState('');
   const [colInvAmt, setColInvAmt] = useState('');
   const [colInvStatus, setColInvStatus] = useState('');
+  const [showAuditModal, setShowAuditModal] = useState(false);
+  const [selectedAuditDoc, setSelectedAuditDoc] = useState<Invoice | null>(null);
+
+  const addAuditEntry = (doc: Invoice, action: string) => ({
+    ...(doc as any),
+    workflowStepHistory: [
+      ...((doc as any).workflowStepHistory || []),
+      { action, userId: currentUser.id, at: new Date().toISOString(), stepIndex: doc.currentStepIndex }
+    ]
+  });
 
   const diApprovedCount = useMemo(
     () => directInvoices.filter((i) => i.status === 'Approved').length,
@@ -52,6 +63,10 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
   );
   const diPendingCount = useMemo(
     () => directInvoices.filter((i) => i.status === 'Pending').length,
+    [directInvoices]
+  );
+  const diRejectedCount = useMemo(
+    () => directInvoices.filter((i) => i.status === 'Rejected').length,
     [directInvoices]
   );
 
@@ -99,7 +114,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
     department: '',
     subDepartment: '',
     centerNames: [],
-    items: [{ id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, tds: 0, gst: 0, remarks: '', coaCode: '' }],
+    items: [{ id: Math.random().toString(), itemName: '', desc: '', quantity: 1, rate: 0, amount: 0, tds: 0, gst: 0, remarks: '', coaCode: '' }],
     tds: 0,
     gst: 0,
     amount: 0,
@@ -121,7 +136,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
   const addItem = () => {
     setInvoiceForm((prev: any) => ({
       ...prev,
-      items: [...(prev.items || []), { id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, tds: 0, gst: 0, remarks: '', coaCode: '' }]
+      items: [...(prev.items || []), { id: Math.random().toString(), itemName: '', desc: '', quantity: 1, rate: 0, amount: 0, tds: 0, gst: 0, remarks: '', coaCode: '' }]
     }));
   };
 
@@ -148,7 +163,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
             const coa = (masters.COA ?? []).find((c: any) => c.id === itemMaster?.coaId);
             updated.coaCode = (coa?.code ?? itemMaster?.coaCode ?? '') || '';
           }
-          if (field === 'itemName' || field === 'remarks' || field === 'coaCode') return updated;
+          if (field === 'itemName' || field === 'desc' || field === 'remarks' || field === 'coaCode') return updated;
           const qty = Number(updated.quantity) || 0;
           const rate = Number(updated.rate) || 0;
           const baseAmount = qty * rate;
@@ -176,7 +191,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
   };
 
   const downloadTemplate = () => {
-    const headers = 'Item Name,Qty,Rate,Remarks';
+    const headers = 'Item Name,Desc,Qty,Rate,Remarks';
     const blob = new Blob([headers], { type: 'text/csv' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -199,6 +214,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
         const data = results.data as any[];
         const newItems: ItemLine[] = data.map((row: any) => {
           const itemName = row['Item Name'] || row['itemName'] || '';
+          const desc = row['Desc'] || row['desc'] || row['Description'] || row['description'] || '';
           const qty = parseFloat(row['Qty'] || row['quantity'] || '0');
           const rate = parseFloat(row['Rate'] || row['rate'] || '0');
           const itemMaster = (masters.Item ?? []).find((i: any) => i.name === itemName);
@@ -214,6 +230,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
           return {
             id: Math.random().toString(),
             itemName,
+            desc,
             quantity: qty,
             rate,
             amount: base,
@@ -266,6 +283,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
       status: budgetCheck.ok ? 'Pending' : 'Budget Hold',
       currentStepIndex: 0,
       createdAt: new Date().toISOString(),
+      workflowStepHistory: [{ action: 'submit', userId: currentUser.id, at: new Date().toISOString(), stepIndex: 0 }],
     };
     setDirectInvoices([...directInvoices, newInvoice]);
     setShowForm(false);
@@ -320,7 +338,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
       department: '',
       subDepartment: '',
       centerNames: [],
-      items: [{ id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, tds: 0, gst: 0, remarks: '', coaCode: '' }],
+      items: [{ id: Math.random().toString(), itemName: '', desc: '', quantity: 1, rate: 0, amount: 0, tds: 0, gst: 0, remarks: '', coaCode: '' }],
       tds: 0,
       gst: 0,
       amount: 0,
@@ -402,7 +420,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
         (w.maxAmount == null || Number(inv.amount) <= Number(w.maxAmount))
       );
       if (!rule || inv.currentStepIndex >= rule.approvalChain.length - 1) return inv;
-      return { ...inv, currentStepIndex: inv.currentStepIndex + 1 };
+      return addAuditEntry({ ...inv, currentStepIndex: inv.currentStepIndex + 1 }, 'completeReview');
     }));
   };
 
@@ -424,13 +442,13 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
         const budgetCheck = checkBudget(inv);
         if (!budgetCheck.ok) {
           alert(`Cannot approve Invoice: ${budgetCheck.errors?.join('\n')}`);
-          return { ...inv, status: 'Budget Hold' };
+          return addAuditEntry({ ...inv, status: 'Budget Hold' }, 'approve');
         }
         deductBudget(inv);
-        return { ...inv, status: 'Approved' };
+        return addAuditEntry({ ...inv, status: 'Approved' }, 'approve');
       }
 
-      return { ...inv, currentStepIndex: inv.currentStepIndex + 1 };
+      return addAuditEntry({ ...inv, currentStepIndex: inv.currentStepIndex + 1 }, 'approve');
     }));
   };
 
@@ -448,6 +466,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
             <TransactionListFilterBar
               approvedCount={diApprovedCount}
               pendingCount={diPendingCount}
+              rejectedCount={diRejectedCount}
               statusQuick={listStatusQuick}
               onStatusQuick={setListStatusQuick}
               dateFrom={listDateFrom}
@@ -660,6 +679,16 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
                           {itemsForDropdown.filter((i: any) => !invoiceForm.items?.some((selected: any) => selected.id !== item.id && selected.itemName === i.name)).map((i: any) => <option key={i.id} value={i.name}>{i.name}</option>)}
                         </select>
                       </div>
+                      <div className="col-span-2 space-y-1">
+                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Desc</label>
+                        <input
+                          type="text"
+                          className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                          value={item.desc ?? ''}
+                          onChange={e => updateItem(item.id, 'desc', e.target.value)}
+                          placeholder="Description"
+                        />
+                      </div>
                       <div className="col-span-1 space-y-1">
                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Qty</label>
                         <input 
@@ -721,7 +750,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Net Amount</label>
                         <div className="w-full bg-slate-100 border border-slate-200 rounded-xl px-3 py-2 text-sm font-black text-indigo-600">₹{(Number(item.totalAmount) || 0).toFixed(2)}</div>
                       </div>
-                      <div className="col-span-2 space-y-1">
+                      <div className="col-span-1 space-y-1">
                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Remarks <span className="text-red-500">*</span></label>
                         <input 
                           type="text"
@@ -915,13 +944,17 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
                     <td className="px-6 py-4 font-black text-indigo-600">₹{(Number(inv.amount) || 0).toFixed(2)}</td>
                     <td className="px-6 py-4">
                       <div className="flex flex-col space-y-1">
-                        <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider w-fit ${
-                          inv.status === 'Approved' ? 'bg-emerald-100 text-emerald-600' : 
-                          inv.status === 'Budget Hold' ? 'bg-rose-100 text-rose-700' :
-                          'bg-amber-100 text-amber-600'
-                        }`}>
+                        <button
+                          onClick={() => { setSelectedAuditDoc(inv); setShowAuditModal(true); }}
+                          className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider w-fit ${
+                            inv.status === 'Approved' ? 'bg-emerald-100 text-emerald-600' : 
+                            inv.status === 'Budget Hold' ? 'bg-rose-100 text-rose-700' :
+                            'bg-amber-100 text-amber-600'
+                          }`}
+                          title="View audit log"
+                        >
                           {inv.status}
-                        </span>
+                        </button>
                         {inv.status === 'Pending' && (
                           <div className="text-[10px] font-bold text-slate-400">
                             Step {inv.currentStepIndex + 1}
@@ -993,6 +1026,14 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
           </table>
         </div>
       )}
+      <DocumentAuditLogModal
+        isOpen={showAuditModal}
+        onClose={() => setShowAuditModal(false)}
+        title={selectedAuditDoc ? `Audit Log - ${selectedAuditDoc.id}` : 'Audit Log'}
+        status={selectedAuditDoc?.status}
+        history={(selectedAuditDoc as any)?.workflowStepHistory || []}
+        users={[currentUser]}
+      />
     </div>
   );
 };

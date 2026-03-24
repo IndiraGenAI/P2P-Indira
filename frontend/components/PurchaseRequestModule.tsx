@@ -18,6 +18,7 @@ import {
 import MultiSelect from './MultiSelect';
 import TransactionListFilterBar, { ListStatusQuick } from './TransactionListFilterBar';
 import { AlertCircle, Info } from 'lucide-react';
+import DocumentAuditLogModal from './DocumentAuditLogModal';
 
 interface PurchaseRequestModuleProps {
   masters: Record<MasterType, MasterRecord[]>;
@@ -35,7 +36,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
 }) => {
   const vendorsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Vendor', masters.Vendor ?? []) as MasterRecord[];
   const itemsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Item', masters.Item ?? []) as MasterRecord[];
-  const budgetsForDeduction = filterByWorkflowApproval(workflowV2Rules, 'Budget', budgets);
+  const budgetsForDeduction = filterByWorkflowApproval<Budget>(workflowV2Rules, 'Budget', budgets);
   const [showForm, setShowForm] = useState(false);
   const [prForm, setPrForm] = useState<Partial<PurchaseRequest>>({
     entityName: masters.Entity?.[0]?.name || '',
@@ -50,7 +51,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
     subDepartment: '',
     paymentTerms: '',
     centerNames: [],
-    items: [{ id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, remarks: '' }],
+    items: [{ id: Math.random().toString(), itemName: '', desc: '', quantity: 1, rate: 0, amount: 0, remarks: '' }],
     amount: 0,
     remarks: '',
     overallSummary: '',
@@ -61,7 +62,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
 
   const [budgetExceeded, setBudgetExceeded] = useState(false);
 
-  const [listStatusQuick, setListStatusQuick] = useState<ListStatusQuick>('all');
+  const [listStatusQuick, setListStatusQuick] = useState<ListStatusQuick>('pending');
   const [listDateFrom, setListDateFrom] = useState('');
   const [listDateTo, setListDateTo] = useState('');
   const [listVendorId, setListVendorId] = useState('');
@@ -71,6 +72,16 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
   const [colPrItems, setColPrItems] = useState('');
   const [colPrAmt, setColPrAmt] = useState('');
   const [colPrStatus, setColPrStatus] = useState('');
+  const [showAuditModal, setShowAuditModal] = useState(false);
+  const [selectedAuditDoc, setSelectedAuditDoc] = useState<PurchaseRequest | null>(null);
+
+  const addAuditEntry = (doc: PurchaseRequest, action: string) => ({
+    ...(doc as any),
+    workflowStepHistory: [
+      ...((doc as any).workflowStepHistory || []),
+      { action, userId: currentUser.id, at: new Date().toISOString(), stepIndex: doc.currentStepIndex }
+    ]
+  });
 
   const prApprovedCount = useMemo(
     () => purchaseRequests.filter((p) => p.status === 'Approved').length,
@@ -78,6 +89,10 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
   );
   const prPendingCount = useMemo(
     () => purchaseRequests.filter((p) => p.status === 'Pending').length,
+    [purchaseRequests]
+  );
+  const prRejectedCount = useMemo(
+    () => purchaseRequests.filter((p) => p.status === 'Rejected').length,
     [purchaseRequests]
   );
 
@@ -118,7 +133,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
   const addItem = () => {
     setPrForm(prev => ({
       ...prev,
-      items: [...(prev.items || []), { id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, remarks: '', coaCode: '' }]
+      items: [...(prev.items || []), { id: Math.random().toString(), itemName: '', desc: '', quantity: 1, rate: 0, amount: 0, remarks: '', coaCode: '' }]
     }));
   };
 
@@ -156,7 +171,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
       // If budget is now available, uncheck unbudgeted
       if (budgetCheck.ok) {
         newForm.isUnbudgeted = false;
-        newForm.unbudgetedJustification = '';x
+        newForm.unbudgetedJustification = '';
       }
       return newForm;
     });
@@ -201,12 +216,13 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
     }
 
     const newPR: PurchaseRequest = {
-      ...prForm as PurchaseRequest,
+      ...(prForm as PurchaseRequest),
       id: `PR-${Math.floor(Math.random() * 10000)}`,
       status: budgetCheck.ok ? 'Pending' : 'Budget Hold',
       currentStepIndex: 0,
       createdAt: new Date().toISOString(),
-      attachments: prForm.attachments || []
+      attachments: prForm.attachments || [],
+      workflowStepHistory: [{ action: 'submit', userId: currentUser.id, at: new Date().toISOString(), stepIndex: 0 }]
     };
     setPurchaseRequests([...purchaseRequests, newPR]);
     setShowForm(false);
@@ -218,7 +234,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
       entityName: masters.Entity?.[0]?.name || '',
       vendorId: '', vendorSiteId: '', transactionType: getItemTypesFromMasters(masters)[0]?.name ?? '', validFrom: '', validTo: '', requiredDate: '',
       frequency: 'One-Time', department: '', subDepartment: '', paymentTerms: '',
-      centerNames: [], items: [{ id: Math.random().toString(), itemName: '', quantity: 1, rate: 0, amount: 0, remarks: '', coaCode: '' }],
+      centerNames: [], items: [{ id: Math.random().toString(), itemName: '', desc: '', quantity: 1, rate: 0, amount: 0, remarks: '', coaCode: '' }],
       amount: 0, remarks: '', overallSummary: '', attachments: [],
       isUnbudgeted: false, unbudgetedJustification: ''
     });
@@ -292,7 +308,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
         (w.maxAmount == null || Number(pr.amount) <= Number(w.maxAmount))
       );
       if (!rule || pr.currentStepIndex >= rule.approvalChain.length - 1) return pr;
-      return { ...pr, currentStepIndex: pr.currentStepIndex + 1 };
+      return addAuditEntry({ ...pr, currentStepIndex: pr.currentStepIndex + 1 }, 'completeReview');
     }));
   };
 
@@ -310,15 +326,15 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
       );
 
       if (!rule || pr.currentStepIndex >= rule.approvalChain.length - 1) {
-        return { ...pr, status: 'Approved' };
+        return addAuditEntry({ ...pr, status: 'Approved' }, 'approve');
       }
 
-      return { ...pr, currentStepIndex: pr.currentStepIndex + 1 };
+      return addAuditEntry({ ...pr, currentStepIndex: pr.currentStepIndex + 1 }, 'approve');
     }));
   };
 
   const amendPR = (id: string) => {
-    setPurchaseRequests(purchaseRequests.map(pr => pr.id === id ? { ...pr, status: 'Pending', currentStepIndex: 0 } : pr));
+    setPurchaseRequests(purchaseRequests.map(pr => pr.id === id ? addAuditEntry({ ...pr, status: 'Pending', currentStepIndex: 0 }, 'amend') : pr));
     alert('PR status reset to Pending for amendment. It will follow the approval workflow again.');
   };
 
@@ -331,6 +347,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
             <TransactionListFilterBar
               approvedCount={prApprovedCount}
               pendingCount={prPendingCount}
+              rejectedCount={prRejectedCount}
               statusQuick={listStatusQuick}
               onStatusQuick={setListStatusQuick}
               dateFrom={listDateFrom}
@@ -552,7 +569,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
               <div className="space-y-3">
                 {prForm.items?.map((item, idx) => (
                   <div key={item.id} className="grid grid-cols-12 gap-4 items-end bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                    <div className="col-span-3 space-y-1">
+                    <div className="col-span-2 space-y-1">
                       <label className="text-[10px] font-black text-slate-400 uppercase">Item Name</label>
                       <select 
                         className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
@@ -564,6 +581,16 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
                           <option key={i.id} value={i.name}>{i.name}</option>
                         ))}
                       </select>
+                    </div>
+                    <div className="col-span-2 space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase">Desc</label>
+                      <input
+                        type="text"
+                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500"
+                        value={item.desc ?? ''}
+                        onChange={e => updateItem(item.id, 'desc', e.target.value)}
+                        placeholder="Description"
+                      />
                     </div>
                     <div className="col-span-1 space-y-1">
                       <label className="text-[10px] font-black text-slate-400 uppercase">Qty</label>
@@ -589,7 +616,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
                         ₹{(Number(item.amount) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
                       </div>
                     </div>
-                    <div className="col-span-3 space-y-1">
+                    <div className="col-span-2 space-y-1">
                       <label className="text-[10px] font-black text-slate-400 uppercase">Remarks</label>
                       <input 
                         type="text"
@@ -766,14 +793,18 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
                     <span className="text-sm font-black text-indigo-600">₹{pr.amount.toLocaleString()}</span>
                   </td>
                   <td className="px-6 py-4">
-                    <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${
-                      pr.status === 'Approved' ? 'bg-emerald-100 text-emerald-700' :
-                      pr.status === 'Rejected' ? 'bg-rose-100 text-rose-700' :
-                      pr.status === 'Budget Hold' ? 'bg-red-100 text-red-700' :
-                      'bg-amber-100 text-amber-700'
-                    }`}>
+                    <button
+                      onClick={() => { setSelectedAuditDoc(pr); setShowAuditModal(true); }}
+                      className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                        pr.status === 'Approved' ? 'bg-emerald-100 text-emerald-700' :
+                        pr.status === 'Rejected' ? 'bg-rose-100 text-rose-700' :
+                        pr.status === 'Budget Hold' ? 'bg-red-100 text-red-700' :
+                        'bg-amber-100 text-amber-700'
+                      }`}
+                      title="View audit log"
+                    >
                       {pr.status}
-                    </span>
+                    </button>
                     {pr.status === 'Pending' && (
                       <div className="mt-1 text-[10px] font-bold text-slate-400">
                         Step {pr.currentStepIndex + 1}
@@ -845,6 +876,14 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
           </table>
         </div>
       )}
+      <DocumentAuditLogModal
+        isOpen={showAuditModal}
+        onClose={() => setShowAuditModal(false)}
+        title={selectedAuditDoc ? `Audit Log - ${selectedAuditDoc.id}` : 'Audit Log'}
+        status={selectedAuditDoc?.status}
+        history={(selectedAuditDoc as any)?.workflowStepHistory || []}
+        users={[currentUser]}
+      />
     </div>
   );
 };

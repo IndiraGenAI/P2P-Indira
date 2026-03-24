@@ -123,9 +123,19 @@ export interface Attachment {
   source: 'PR' | 'RC' | 'PO' | 'GRN' | 'Invoice';
 }
 
+export interface WorkflowStepHistoryEntry {
+  action: 'submit' | 'completeReview' | 'approve' | 'reject' | 'amend' | string;
+  userId?: string;
+  at?: string;
+  stepIndex?: number;
+}
+
 export interface ItemLine {
   id: string;
+  /** Original source item id for partial receipt tracking. */
+  sourceItemId?: string;
   itemName: string;
+  desc?: string;
   quantity: number;
   rate: number;
   amount: number; // baseAmount: quantity * rate
@@ -143,6 +153,8 @@ export interface ItemLine {
   /** Centers set at RC creation; after approval these cannot be removed, only more can be added. */
   centerNamesLocked?: string[];
   coaCode?: string;
+  /** PO left quantity before current GRN submit (PO-backed GRN form only). */
+  poLeftQty?: number;
   remarks: string;
 }
 
@@ -177,6 +189,7 @@ export interface PurchaseRequest {
   requiredDate?: string;
   shippingAddressId?: string;
   billingAddressId?: string;
+  workflowStepHistory?: WorkflowStepHistoryEntry[];
 }
 
 export interface RateContract {
@@ -205,6 +218,7 @@ export interface RateContract {
   requiredDate?: string;
   shippingAddressId?: string;
   billingAddressId?: string;
+  workflowStepHistory?: WorkflowStepHistoryEntry[];
 }
 
 export interface PurchaseOrder {
@@ -241,6 +255,7 @@ export interface PurchaseOrder {
   billingAddressId?: string;
   isAdvancePO?: boolean;
   advancePercentage?: number;
+  workflowStepHistory?: WorkflowStepHistoryEntry[];
 }
 
 export interface GRN {
@@ -268,6 +283,7 @@ export interface GRN {
   billingAddressId?: string;
   tds?: number;
   gst?: number;
+  workflowStepHistory?: WorkflowStepHistoryEntry[];
 }
 
 export interface Invoice {
@@ -296,6 +312,7 @@ export interface Invoice {
   billingAddressId?: string;
   tds?: number;
   gst?: number;
+  workflowStepHistory?: WorkflowStepHistoryEntry[];
 }
 
 // Workflow specific types

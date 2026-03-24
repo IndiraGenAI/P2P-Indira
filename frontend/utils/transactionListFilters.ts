@@ -22,11 +22,12 @@ export function matchesVendorFilter(rowVendorId: string | undefined, filterVendo
 
 export function matchesStatusQuickFilter(
   status: string,
-  quick: 'all' | 'approved' | 'pending'
+  quick: 'all' | 'approved' | 'pending' | 'rejected'
 ): boolean {
   if (quick === 'all') return true;
   if (quick === 'approved') return status === 'Approved';
   if (quick === 'pending') return status === 'Pending';
+  if (quick === 'rejected') return status === 'Rejected';
   return true;
 }
 

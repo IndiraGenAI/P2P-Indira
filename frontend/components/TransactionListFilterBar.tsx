@@ -1,10 +1,11 @@
 import React from 'react';
 
-export type ListStatusQuick = 'all' | 'approved' | 'pending';
+export type ListStatusQuick = 'all' | 'approved' | 'pending' | 'rejected';
 
 export interface TransactionListFilterBarProps {
   approvedCount: number;
   pendingCount: number;
+  rejectedCount?: number;
   statusQuick: ListStatusQuick;
   onStatusQuick: (v: ListStatusQuick) => void;
   dateFrom: string;
@@ -20,6 +21,7 @@ export interface TransactionListFilterBarProps {
 const TransactionListFilterBar: React.FC<TransactionListFilterBarProps> = ({
   approvedCount,
   pendingCount,
+  rejectedCount = 0,
   statusQuick,
   onStatusQuick,
   dateFrom,
@@ -59,6 +61,17 @@ const TransactionListFilterBar: React.FC<TransactionListFilterBarProps> = ({
           }`}
         >
           Pending ({pendingCount})
+        </button>
+        <button
+          type="button"
+          onClick={() => onStatusQuick(statusQuick === 'rejected' ? 'all' : 'rejected')}
+          className={`px-2.5 py-1 rounded-lg font-black uppercase tracking-wider border transition-colors ${
+            statusQuick === 'rejected'
+              ? 'bg-rose-600 text-white border-rose-600'
+              : 'bg-white text-rose-700 border-rose-200 hover:bg-rose-50'
+          }`}
+        >
+          Rejected ({rejectedCount})
         </button>
       </div>
       <div className="flex flex-wrap items-center gap-1 border-l border-slate-200 pl-2 ml-0.5">

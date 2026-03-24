@@ -12,12 +12,12 @@ const JSON_COLUMNS = {
   workflow_v2_rules: ['approvalChain'],
   roles: ['permissions', 'allowedMasterTypes', 'mastersPermissions'],
   users: ['centerNames', 'departments', 'subDepartments', 'entityNames', 'roleIds'],
-  purchase_requests: ['centerNames', 'items', 'attachments'],
-  rate_contracts: ['items', 'attachments'],
-  purchase_orders: ['centerNames', 'items', 'attachments'],
-  grns: ['items', 'attachments'],
-  invoices: ['items', 'attachments'],
-  direct_invoices: ['items', 'attachments'],
+  purchase_requests: ['centerNames', 'items', 'attachments', 'workflowStepHistory'],
+  rate_contracts: ['items', 'attachments', 'workflowStepHistory'],
+  purchase_orders: ['centerNames', 'items', 'attachments', 'workflowStepHistory'],
+  grns: ['items', 'attachments', 'workflowStepHistory'],
+  invoices: ['items', 'attachments', 'workflowStepHistory'],
+  direct_invoices: ['items', 'attachments', 'workflowStepHistory'],
   budgets: ['workflowStepHistory'],
 };
 
@@ -62,6 +62,107 @@ async function getAll(table) {
     }
     return out;
   });
+}
+
+function parseDateOnly(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function formatDateOnly(d) {
+  return d.toISOString().slice(0, 10);
+}
+
+function addMonthsSafe(date, months) {
+  const d = new Date(date.getTime());
+  const day = d.getDate();
+  d.setMonth(d.getMonth() + months);
+  if (d.getDate() < day) d.setDate(0);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function getFrequencyWindow(today, validFrom, validTo, frequency) {
+  const t = parseDateOnly(today);
+  const vf = parseDateOnly(validFrom);
+  const vt = parseDateOnly(validTo);
+  if (!t || !vf || !vt) return { ok: false, reason: 'invalid_date' };
+  if (t < vf || t > vt) return { ok: false, reason: 'outside_validity' };
+  if (frequency === 'One-Time' || frequency === 'Monthly') {
+    return { ok: true, start: vf, end: vt };
+  }
+
+  const monthsStep = frequency === 'Quarterly' ? 3 : 12;
+  let start = new Date(vf.getTime());
+  let end = addMonthsSafe(start, monthsStep);
+  end.setDate(end.getDate() - 1);
+  while (end < t && start < vt) {
+    start = addMonthsSafe(start, monthsStep);
+    end = addMonthsSafe(start, monthsStep);
+    end.setDate(end.getDate() - 1);
+  }
+  if (start > vt) return { ok: false, reason: 'outside_validity' };
+  if (end > vt) end = new Date(vt.getTime());
+  return { ok: t >= start && t <= end, start, end };
+}
+
+function normalizeNumber(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function lineKey(item, index) {
+  const id = item?.sourceItemId || item?.itemId || item?.id;
+  if (id != null && String(id).trim() !== '') return `id:${String(id)}`;
+  const itemName = String(item?.itemName || '').trim().toLowerCase();
+  const center = String(item?.centerName || '').trim().toLowerCase();
+  const rate = normalizeNumber(item?.rate);
+  return `fallback:${itemName}|${center}|${rate}|${index}`;
+}
+
+async function getPoRemainingQuantities(poId) {
+  const poRes = await query('SELECT * FROM purchase_orders WHERE id = $1', [poId]);
+  const poRow = poRes.rows[0];
+  if (!poRow) return null;
+  const po = rowToCamel(poRow);
+  const poItems = typeof po.items === 'string'
+    ? (() => { try { return JSON.parse(po.items); } catch { return []; } })()
+    : (Array.isArray(po.items) ? po.items : []);
+
+  const grnRes = await query('SELECT * FROM grns WHERE purchase_order_id = $1', [poId]);
+  const poGrns = rowsToCamel(grnRes.rows).map((g) => ({
+    ...g,
+    items: typeof g.items === 'string' ? (() => { try { return JSON.parse(g.items); } catch { return []; } })() : (Array.isArray(g.items) ? g.items : []),
+  }));
+
+  const receivedByKey = new Map();
+  poGrns.forEach((grn) => {
+    (grn.items || []).forEach((it, idx) => {
+      const key = lineKey(it, idx);
+      receivedByKey.set(key, (receivedByKey.get(key) || 0) + normalizeNumber(it.quantity));
+    });
+  });
+
+  const items = poItems.map((it, idx) => {
+    const key = lineKey(it, idx);
+    const orderedQty = normalizeNumber(it.quantity);
+    const receivedQty = normalizeNumber(receivedByKey.get(key) || 0);
+    const leftQty = Math.max(0, orderedQty - receivedQty);
+    return {
+      itemName: it.itemName,
+      itemId: it.id || null,
+      orderedQty,
+      receivedQty,
+      leftQty,
+      rate: normalizeNumber(it.rate),
+      center: it.centerName || '',
+    };
+  });
+
+  return { po, items };
 }
 
 // Build upsert for tables with many columns - use raw column list and JSON for jsonb
@@ -573,7 +674,7 @@ router.patch('/masters/:masterType/:id/workflow', async (req, res) => {
 });
 
 // --- PURCHASE REQUESTS ---
-const PR_COLS = ['id', 'entity_name', 'vendor_id', 'vendor_site_id', 'transaction_type', 'valid_from', 'valid_to', 'frequency', 'department', 'sub_department', 'payment_terms', 'terms_and_conditions_id', 'center_names', 'items', 'amount', 'remarks', 'overall_summary', 'attachments', 'status', 'current_step_index', 'is_unbudgeted', 'unbudgeted_justification', 'unbudgeted_attachment_url', 'rejection_remarks', 'created_by', 'created_at', 'required_date', 'shipping_address_id', 'billing_address_id'];
+const PR_COLS = ['id', 'entity_name', 'vendor_id', 'vendor_site_id', 'transaction_type', 'valid_from', 'valid_to', 'frequency', 'department', 'sub_department', 'payment_terms', 'terms_and_conditions_id', 'center_names', 'items', 'amount', 'remarks', 'overall_summary', 'attachments', 'workflow_step_history', 'status', 'current_step_index', 'is_unbudgeted', 'unbudgeted_justification', 'unbudgeted_attachment_url', 'rejection_remarks', 'created_by', 'created_at', 'required_date', 'shipping_address_id', 'billing_address_id'];
 router.get('/purchase-requests', async (req, res) => {
   try {
     const rows = await getAll('purchase_requests');
@@ -593,7 +694,7 @@ router.post('/purchase-requests', async (req, res) => {
 });
 
 // --- RATE CONTRACTS ---
-const RC_COLS = ['id', 'entity_name', 'vendor_id', 'vendor_site_id', 'transaction_type', 'valid_from', 'valid_to', 'frequency', 'department', 'sub_department', 'payment_terms', 'terms_and_conditions_id', 'items', 'amount', 'remarks', 'overall_summary', 'attachments', 'status', 'current_step_index', 'rejection_remarks', 'created_by', 'created_at', 'required_date', 'shipping_address_id', 'billing_address_id'];
+const RC_COLS = ['id', 'entity_name', 'vendor_id', 'vendor_site_id', 'transaction_type', 'valid_from', 'valid_to', 'frequency', 'department', 'sub_department', 'payment_terms', 'terms_and_conditions_id', 'items', 'amount', 'remarks', 'overall_summary', 'attachments', 'workflow_step_history', 'status', 'current_step_index', 'rejection_remarks', 'created_by', 'created_at', 'required_date', 'shipping_address_id', 'billing_address_id'];
 router.get('/rate-contracts', async (req, res) => {
   try {
     const rows = await getAll('rate_contracts');
@@ -613,7 +714,7 @@ router.post('/rate-contracts', async (req, res) => {
 });
 
 // --- PURCHASE ORDERS ---
-const PO_COLS = ['id', 'entity_name', 'vendor_id', 'vendor_site_id', 'transaction_type', 'valid_from', 'valid_to', 'frequency', 'department', 'sub_department', 'payment_terms', 'terms_and_conditions_id', 'center_names', 'items', 'tds', 'gst', 'amount', 'remarks', 'overall_summary', 'attachments', 'status', 'current_step_index', 'is_unbudgeted', 'unbudgeted_justification', 'unbudgeted_attachment_url', 'rejection_remarks', 'created_by', 'created_at', 'required_date', 'shipping_address_id', 'billing_address_id', 'is_advance_po', 'advance_percentage'];
+const PO_COLS = ['id', 'entity_name', 'vendor_id', 'vendor_site_id', 'transaction_type', 'valid_from', 'valid_to', 'frequency', 'department', 'sub_department', 'payment_terms', 'terms_and_conditions_id', 'center_names', 'items', 'tds', 'gst', 'amount', 'remarks', 'overall_summary', 'attachments', 'workflow_step_history', 'status', 'current_step_index', 'is_unbudgeted', 'unbudgeted_justification', 'unbudgeted_attachment_url', 'rejection_remarks', 'created_by', 'created_at', 'required_date', 'shipping_address_id', 'billing_address_id', 'is_advance_po', 'advance_percentage'];
 router.get('/purchase-orders', async (req, res) => {
   try {
     const rows = await getAll('purchase_orders');
@@ -632,8 +733,19 @@ router.post('/purchase-orders', async (req, res) => {
   }
 });
 
+router.get('/purchase-orders/:id/remaining-quantities', async (req, res) => {
+  try {
+    const poId = req.params.id;
+    const result = await getPoRemainingQuantities(poId);
+    if (!result) return res.status(404).json({ error: 'Purchase order not found' });
+    res.json({ items: result.items });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // --- GRNs ---
-const GRN_COLS = ['id', 'entity_name', 'rate_contract_id', 'purchase_order_id', 'vendor_site_id', 'location', 'department', 'sub_department', 'invoice_number', 'invoice_date', 'items', 'amount', 'remarks', 'overall_summary', 'attachments', 'status', 'current_step_index', 'rejection_remarks', 'created_by', 'created_at', 'shipping_address_id', 'billing_address_id', 'tds', 'gst'];
+const GRN_COLS = ['id', 'entity_name', 'rate_contract_id', 'purchase_order_id', 'vendor_site_id', 'location', 'department', 'sub_department', 'invoice_number', 'invoice_date', 'items', 'amount', 'remarks', 'overall_summary', 'attachments', 'workflow_step_history', 'status', 'current_step_index', 'rejection_remarks', 'created_by', 'created_at', 'shipping_address_id', 'billing_address_id', 'tds', 'gst'];
 router.get('/grns', async (req, res) => {
   try {
     const rows = await getAll('grns');
@@ -657,6 +769,70 @@ router.post('/grns', async (req, res) => {
           if (r.createdAt === '') r.createdAt = null;
           return r;
         })();
+
+    const rowsToValidate = Array.isArray(body) ? body : [body];
+    const ids = rowsToValidate.map((r) => String(r.id || '')).filter(Boolean);
+    let existingIds = new Set();
+    if (ids.length > 0) {
+      const existingRes = await query('SELECT id FROM grns WHERE id = ANY($1)', [ids]);
+      existingIds = new Set(existingRes.rows.map((r) => String(r.id)));
+    }
+    const newRows = rowsToValidate.filter((r) => !existingIds.has(String(r.id || '')));
+
+    for (const grnRow of newRows) {
+      // PO-only validations. Rate Contract GRN flow remains unchanged.
+      if (!grnRow.purchaseOrderId) continue;
+
+      const result = await getPoRemainingQuantities(grnRow.purchaseOrderId);
+      if (!result) return res.status(400).json({ error: `Purchase order not found for ${grnRow.purchaseOrderId}` });
+      const { po, items } = result;
+
+      if (items.every((it) => normalizeNumber(it.leftQty) <= 0)) {
+        return res.status(400).json({ error: 'All items have been fully received. No more GRNs can be created.' });
+      }
+
+      const basisDate = parseDateOnly(grnRow.invoiceDate) || parseDateOnly(new Date().toISOString());
+      const validityFrom = parseDateOnly(po.validFrom);
+      const validityTo = parseDateOnly(po.validTo);
+      if (!basisDate || !validityFrom || !validityTo) {
+        return res.status(400).json({ error: 'PO validity dates are invalid. Cannot create GRN.' });
+      }
+      if (basisDate < validityFrom || basisDate > validityTo) {
+        return res.status(400).json({
+          error: `GRN can only be created between ${formatDateOnly(validityFrom)} and ${formatDateOnly(validityTo)}.`,
+        });
+      }
+
+      const window = getFrequencyWindow(basisDate, po.validFrom, po.validTo, po.frequency || 'One-Time');
+      if (!window.ok && window.reason === 'outside_validity') {
+        return res.status(400).json({
+          error: `GRN can only be created between ${formatDateOnly(validityFrom)} and ${formatDateOnly(validityTo)}.`,
+        });
+      }
+      if (!window.ok) {
+        return res.status(400).json({ error: `GRN cannot be created in the current ${po.frequency || 'One-Time'} period.` });
+      }
+
+      const leftById = new Map(items.map((it) => [String(it.itemId || ''), it]));
+      const leftByName = new Map(items.map((it) => [String(it.itemName || '').trim().toLowerCase(), it]));
+      const grnItems = Array.isArray(grnRow.items) ? grnRow.items : [];
+      for (const gi of grnItems) {
+        const qty = normalizeNumber(gi.quantity);
+        const matched =
+          leftById.get(String(gi.sourceItemId || gi.itemId || gi.id || '')) ||
+          leftByName.get(String(gi.itemName || '').trim().toLowerCase());
+        if (!matched) continue;
+        if (qty <= 0) {
+          return res.status(400).json({ error: 'Quantity must be greater than 0.' });
+        }
+        if (qty > normalizeNumber(matched.leftQty)) {
+          return res.status(400).json({
+            error: `Cannot receive more than remaining quantity. Left qty for ${matched.itemName} is ${matched.leftQty}.`,
+          });
+        }
+      }
+    }
+
     await buildUpsert('grns', 'id', GRN_COLS, body);
     const rows = await getAll('grns');
     res.json(rows);
@@ -666,7 +842,7 @@ router.post('/grns', async (req, res) => {
 });
 
 // --- INVOICES ---
-const INV_COLS = ['id', 'entity_name', 'grn_id', 'vendor_site_id', 'location', 'department', 'sub_department', 'invoice_number', 'invoice_date', 'items', 'amount', 'remarks', 'overall_summary', 'status', 'current_step_index', 'rejection_remarks', 'created_by', 'created_at', 'attachments', 'shipping_address_id', 'billing_address_id', 'tds', 'gst'];
+const INV_COLS = ['id', 'entity_name', 'grn_id', 'vendor_site_id', 'location', 'department', 'sub_department', 'invoice_number', 'invoice_date', 'items', 'amount', 'remarks', 'overall_summary', 'workflow_step_history', 'status', 'current_step_index', 'rejection_remarks', 'created_by', 'created_at', 'attachments', 'shipping_address_id', 'billing_address_id', 'tds', 'gst'];
 router.get('/invoices', async (req, res) => {
   try {
     const rows = await getAll('invoices');
@@ -699,7 +875,7 @@ router.post('/invoices', async (req, res) => {
 });
 
 // --- DIRECT INVOICES (standalone; no GRN link) ---
-const DIRECT_INV_COLS = ['id', 'entity_name', 'vendor_site_id', 'location', 'department', 'sub_department', 'invoice_number', 'invoice_date', 'items', 'amount', 'remarks', 'overall_summary', 'status', 'current_step_index', 'rejection_remarks', 'created_by', 'created_at', 'center_names', 'attachments', 'shipping_address_id', 'billing_address_id', 'tds', 'gst'];
+const DIRECT_INV_COLS = ['id', 'entity_name', 'vendor_site_id', 'location', 'department', 'sub_department', 'invoice_number', 'invoice_date', 'items', 'amount', 'remarks', 'overall_summary', 'workflow_step_history', 'status', 'current_step_index', 'rejection_remarks', 'created_by', 'created_at', 'center_names', 'attachments', 'shipping_address_id', 'billing_address_id', 'tds', 'gst'];
 router.get('/direct-invoices', async (req, res) => {
   try {
     const rows = await getAll('direct_invoices');
