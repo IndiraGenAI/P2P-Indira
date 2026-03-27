@@ -26,6 +26,8 @@ import DocumentAuditLogModal from './DocumentAuditLogModal';
 
 const PO_LINE_GST_USE_HEADER = '__HEADER__' as const;
 
+type ViewMode = 'PO' | 'GRN' | 'Invoice';
+
 interface PurchaseOrderModuleProps {
   masters: Record<MasterType, MasterRecord[]>;
   purchaseOrders: PurchaseOrder[];
@@ -41,9 +43,10 @@ interface PurchaseOrderModuleProps {
   budgets: Budget[];
   setBudgets: React.Dispatch<React.SetStateAction<Budget[]>>;
   workflowV2Rules?: WorkflowV2Rule[];
+  /** One-shot navigation from Dashboard (view + list filter); consumed after apply. */
+  moduleEntryIntent?: { key: number; viewMode: ViewMode; listStatusQuick: ListStatusQuick } | null;
+  onModuleEntryIntentConsumed?: () => void;
 }
-
-type ViewMode = 'PO' | 'GRN' | 'Invoice';
 
 type PoRemainingItem = {
   itemName: string;
@@ -56,7 +59,9 @@ type PoRemainingItem = {
 };
 
 const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({ 
-  masters, purchaseOrders, setPurchaseOrders, grns, setGrns, invoices, setInvoices, pendingPR, onPOCreated, currentUser, workflows, budgets, setBudgets, workflowV2Rules = []
+  masters, purchaseOrders, setPurchaseOrders, grns, setGrns, invoices, setInvoices, pendingPR, onPOCreated, currentUser, workflows, budgets, setBudgets, workflowV2Rules = [],
+  moduleEntryIntent = null,
+  onModuleEntryIntentConsumed,
 }) => {
   const getTodayISTDate = () => {
     const parts = new Intl.DateTimeFormat('en-CA', {
@@ -97,7 +102,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
   const [listVendorId, setListVendorId] = useState('');
   const [colPoId, setColPoId] = useState('');
   const [colPoDetails, setColPoDetails] = useState('');
-  const [colPoReq, setColPoReq] = useState('');
+  const [colPoDate, setColPoDate] = useState('');
   const [colPoStatus, setColPoStatus] = useState('');
   const [colGrnId, setColGrnId] = useState('');
   const [colGrnDetails, setColGrnDetails] = useState('');
@@ -180,7 +185,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     setListVendorId('');
     setColPoId('');
     setColPoDetails('');
-    setColPoReq('');
+    setColPoDate('');
     setColPoStatus('');
     setColGrnId('');
     setColGrnDetails('');
@@ -189,6 +194,13 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     setColInvDetails('');
     setColInvStatus('');
   }, [viewMode]);
+
+  useEffect(() => {
+    if (!moduleEntryIntent) return;
+    setViewMode(moduleEntryIntent.viewMode);
+    setListStatusQuick(moduleEntryIntent.listStatusQuick);
+    onModuleEntryIntentConsumed?.();
+  }, [moduleEntryIntent?.key]);
 
   // Form states
   const [poForm, setPoForm] = useState<Partial<PurchaseOrder>>({
@@ -989,11 +1001,12 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       const details = `${vendorName} ${po.items.length} ${po.centerNames.length} ${(Number(po.amount) || 0).toFixed(2)}`;
       if (!textIncludes(po.id, colPoId)) return false;
       if (!textIncludes(details, colPoDetails)) return false;
-      if (!textIncludes(po.requiredDate || 'N/A', colPoReq)) return false;
+      const poCreatedDateStr = po.createdAt ? new Date(po.createdAt).toLocaleDateString() : '';
+      if (!textIncludes(poCreatedDateStr, colPoDate)) return false;
       if (!textIncludes(po.status, colPoStatus)) return false;
       return true;
     });
-  }, [purchaseOrders, masters, listDateFrom, listDateTo, listVendorId, listStatusQuick, colPoId, colPoDetails, colPoReq, colPoStatus]);
+  }, [purchaseOrders, masters, listDateFrom, listDateTo, listVendorId, listStatusQuick, colPoId, colPoDetails, colPoDate, colPoStatus]);
 
   const filteredPoGrns = useMemo(() => {
     return poGrns.filter((grn) => {
@@ -1315,6 +1328,19 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
             />
           </div>
           <div className="px-6 py-2 min-w-0">
+            {viewMode === 'PO' ? (
+              <input
+                type="text"
+                placeholder="Filter…"
+                value={colPoDate}
+                onChange={(e) => setColPoDate(e.target.value)}
+                className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
+              />
+            ) : (
+              <span className="text-[10px] text-slate-400 font-bold block py-1">—</span>
+            )}
+          </div>
+          <div className="px-6 py-2 min-w-0">
             <input
               type="text"
               placeholder="Filter…"
@@ -1327,19 +1353,6 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
               }}
               className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
             />
-          </div>
-          <div className="px-6 py-2 min-w-0">
-            {viewMode === 'PO' ? (
-              <input
-                type="text"
-                placeholder="Filter…"
-                value={colPoReq}
-                onChange={(e) => setColPoReq(e.target.value)}
-                className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
-              />
-            ) : (
-              <span className="text-[10px] text-slate-400 font-bold block py-1">—</span>
-            )}
           </div>
           <div className="px-6 py-2 min-w-0">
             <input
@@ -2380,9 +2393,9 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
             </colgroup>
             <thead>
               <tr className="bg-slate-50/50 border-b border-slate-100">
-                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">ID / Date</th>
+                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Transaction No.</th>
+                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Date</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Vendor Name</th>
-                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Required Date</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Status</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Actions</th>
               </tr>
@@ -2392,14 +2405,13 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                 <tr key={po.id} className="hover:bg-slate-50/50 transition-colors">
                   <td className="px-6 py-4">
                     <div className="text-sm font-black text-slate-900">{po.id}</div>
-                    <div className="text-[10px] text-slate-400 font-bold">{new Date(po.createdAt).toLocaleDateString()}</div>
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="text-sm font-bold text-slate-700">{po.createdAt ? new Date(po.createdAt).toLocaleDateString() : '—'}</div>
                   </td>
                   <td className="px-6 py-4">
                     <div className="text-sm font-bold text-slate-700">{(masters.Vendor ?? []).find(v => v.id === po.vendorId)?.name}</div>
                     <div className="text-xs text-slate-500">{po.items.length} Items • {po.centerNames.length} Centers • ₹{(Number(po.amount) || 0).toFixed(2)}</div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="text-sm font-bold text-slate-700">{po.requiredDate || 'N/A'}</div>
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex flex-col space-y-1">

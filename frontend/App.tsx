@@ -3,7 +3,7 @@ import { User, Role, NavigationTab, ModuleType, MasterRecord, MasterType, Workfl
 import { ALL_MASTER_TYPES } from './constants';
 import { getDepartments } from './utils/mastersHelpers';
 import Sidebar from './components/Sidebar';
-import Dashboard from './components/Dashboard';
+import Dashboard, { DashboardNavigatePayload } from './components/Dashboard';
 import UserManagement from './components/UserManagement';
 import RoleConfiguration from './components/RoleConfiguration';
 import WorkflowConfiguration from './components/WorkflowConfiguration';
@@ -73,6 +73,17 @@ const App: React.FC = () => {
   const [pendingBudgetCount, setPendingBudgetCount] = useState(0);
   const [deptLimits, setDeptLimits] = useState<DepartmentLimit[]>([]);
   const [pendingPOFromPR, setPendingPOFromPR] = useState<PurchaseRequest | null>(null);
+  /** One-shot view when opening RC/PO from Dashboard pending modal. Cleared on Sidebar tab change or after module consumes. */
+  const [rateContractNavIntent, setRateContractNavIntent] = useState<{
+    key: number;
+    viewMode: 'RC' | 'GRN' | 'Invoice';
+    listStatusQuick: 'pending';
+  } | null>(null);
+  const [purchaseOrderNavIntent, setPurchaseOrderNavIntent] = useState<{
+    key: number;
+    viewMode: 'PO' | 'GRN' | 'Invoice';
+    listStatusQuick: 'pending';
+  } | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [masters, setMasters] = useState<Record<MasterType, MasterRecord[]>>({});
   const [sessionRemaining, setSessionRemaining] = useState<number | null>(null);
@@ -340,6 +351,34 @@ const App: React.FC = () => {
     return result;
   };
 
+  const handleSidebarTabChange = (tab: NavigationTab) => {
+    setRateContractNavIntent(null);
+    setPurchaseOrderNavIntent(null);
+    setActiveTab(tab);
+  };
+
+  const handleDashboardNavigate = (nav: DashboardNavigatePayload) => {
+    if (nav.tab === 'rate_contract') {
+      setPurchaseOrderNavIntent(null);
+      setRateContractNavIntent(
+        nav.viewMode ? { key: Date.now(), viewMode: nav.viewMode, listStatusQuick: 'pending' } : null
+      );
+      setActiveTab('rate_contract');
+      return;
+    }
+    if (nav.tab === 'purchase_order') {
+      setRateContractNavIntent(null);
+      setPurchaseOrderNavIntent(
+        nav.viewMode ? { key: Date.now(), viewMode: nav.viewMode, listStatusQuick: 'pending' } : null
+      );
+      setActiveTab('purchase_order');
+      return;
+    }
+    setRateContractNavIntent(null);
+    setPurchaseOrderNavIntent(null);
+    setActiveTab(nav.tab);
+  };
+
   const renderContent = () => {
     const isSuperAdmin = roles.filter(r => currentUser?.roleIds.includes(r.id)).some(r => r.name === 'Super Admin');
     const superAdminOnlyTabs: NavigationTab[] = ['users', 'roles', 'workflows'];
@@ -351,7 +390,7 @@ const App: React.FC = () => {
     }
 
     switch (activeTab) {
-      case 'dashboard': return <Dashboard users={users} roles={roles} />;
+      case 'dashboard': return <Dashboard users={users} roles={roles} onNavigateFromDashboard={handleDashboardNavigate} />;
       case 'users': return <UserManagement users={users} setUsers={setUsers} roles={roles} masters={masters} />;
       case 'roles': return <RoleConfiguration roles={roles} setRoles={setRoles} />;
       case 'workflows': return <WorkflowConfiguration workflows={workflows} setWorkflows={setWorkflows} users={users} masters={masters} />;
@@ -370,6 +409,8 @@ const App: React.FC = () => {
             purchaseRequests={purchaseRequests}
             setPurchaseRequests={setPurchaseRequests}
             onCreatePO={(pr) => {
+              setRateContractNavIntent(null);
+              setPurchaseOrderNavIntent(null);
               setActiveTab('purchase_order');
               setPendingPOFromPR(pr);
             }}
@@ -393,6 +434,8 @@ const App: React.FC = () => {
             currentUser={currentUser!}
             workflows={workflows}
             workflowV2Rules={workflowV2Rules}
+            moduleEntryIntent={rateContractNavIntent}
+            onModuleEntryIntentConsumed={() => setRateContractNavIntent(null)}
           />
         );
       case 'purchase_order':
@@ -413,6 +456,8 @@ const App: React.FC = () => {
             budgets={budgets}
             setBudgets={setBudgets}
             workflowV2Rules={workflowV2Rules}
+            moduleEntryIntent={purchaseOrderNavIntent}
+            onModuleEntryIntentConsumed={() => setPurchaseOrderNavIntent(null)}
           />
         );
       case 'direct_invoice':
@@ -445,7 +490,7 @@ const App: React.FC = () => {
             onRefreshPendingCounts={refreshPendingApprovalCounts}
           />
         );
-      default: return <Dashboard users={users} roles={roles} />;
+      default: return <Dashboard users={users} roles={roles} onNavigateFromDashboard={handleDashboardNavigate} />;
     }
   };
 
@@ -486,7 +531,7 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen min-h-0 overflow-hidden bg-slate-50 font-sans text-slate-900">
-      <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} currentUser={currentUser} roles={roles} onLogout={handleLogout} pendingItemCount={pendingItemCount} pendingVendorCount={pendingVendorCount} pendingBudgetCount={pendingBudgetCount} />
+      <Sidebar activeTab={activeTab} setActiveTab={handleSidebarTabChange} currentUser={currentUser} roles={roles} onLogout={handleLogout} pendingItemCount={pendingItemCount} pendingVendorCount={pendingVendorCount} pendingBudgetCount={pendingBudgetCount} />
       <main className="flex-1 overflow-y-auto p-8 relative">
         {showSessionWarning && (
           <div className="sticky top-0 z-30 mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-center text-sm font-bold text-amber-800 shadow-sm">

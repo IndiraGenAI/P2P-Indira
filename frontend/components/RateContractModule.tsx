@@ -22,6 +22,8 @@ import TransactionListFilterBar, { ListStatusQuick } from './TransactionListFilt
 import SearchableSelect from './SearchableSelect';
 import DocumentAuditLogModal from './DocumentAuditLogModal';
 
+type ViewMode = 'RC' | 'GRN' | 'Invoice';
+
 interface RateContractModuleProps {
   masters: Record<MasterType, MasterRecord[]>;
   rateContracts: RateContract[];
@@ -33,12 +35,15 @@ interface RateContractModuleProps {
   currentUser: User;
   workflows: WorkflowRule[];
   workflowV2Rules?: WorkflowV2Rule[];
+  /** One-shot navigation from Dashboard (view + list filter); consumed after apply. */
+  moduleEntryIntent?: { key: number; viewMode: ViewMode; listStatusQuick: ListStatusQuick } | null;
+  onModuleEntryIntentConsumed?: () => void;
 }
 
-type ViewMode = 'RC' | 'GRN' | 'Invoice';
-
 const RateContractModule: React.FC<RateContractModuleProps> = ({ 
-  masters, rateContracts, setRateContracts, grns, setGrns, invoices, setInvoices, currentUser, workflows, workflowV2Rules = []
+  masters, rateContracts, setRateContracts, grns, setGrns, invoices, setInvoices, currentUser, workflows, workflowV2Rules = [],
+  moduleEntryIntent = null,
+  onModuleEntryIntentConsumed,
 }) => {
   const getTodayISTDate = () => {
     const parts = new Intl.DateTimeFormat('en-CA', {
@@ -120,6 +125,7 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
   const [listDateTo, setListDateTo] = useState('');
   const [listVendorId, setListVendorId] = useState('');
   const [colRcId, setColRcId] = useState('');
+  const [colRcDate, setColRcDate] = useState('');
   const [colRcDetails, setColRcDetails] = useState('');
   const [colRcStatus, setColRcStatus] = useState('');
   const [colGrnId, setColGrnId] = useState('');
@@ -145,6 +151,7 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
     setListDateTo('');
     setListVendorId('');
     setColRcId('');
+    setColRcDate('');
     setColRcDetails('');
     setColRcStatus('');
     setColGrnId('');
@@ -154,6 +161,13 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
     setColInvDetails('');
     setColInvStatus('');
   }, [viewMode]);
+
+  useEffect(() => {
+    if (!moduleEntryIntent) return;
+    setViewMode(moduleEntryIntent.viewMode);
+    setListStatusQuick(moduleEntryIntent.listStatusQuick);
+    onModuleEntryIntentConsumed?.();
+  }, [moduleEntryIntent?.key]);
 
   // Update total amount whenever items change
   useEffect(() => {
@@ -812,12 +826,14 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
       if (!matchesStatusQuickFilter(rc.status, listStatusQuick)) return false;
       const vendorName = (masters['Vendor'] || []).find((v) => v.id === rc.vendorId)?.name || '';
       const details = `${vendorName} ${rc.items.length} ${(Number(rc.amount) || 0).toFixed(2)}`;
+      const rcDateText = rc.createdAt ? new Date(rc.createdAt).toLocaleDateString() : '';
       if (!textIncludes(rc.id, colRcId)) return false;
+      if (!textIncludes(rcDateText, colRcDate)) return false;
       if (!textIncludes(details, colRcDetails)) return false;
       if (!textIncludes(rc.status, colRcStatus)) return false;
       return true;
     });
-  }, [rateContracts, masters, listDateFrom, listDateTo, listVendorId, listStatusQuick, colRcId, colRcDetails, colRcStatus]);
+  }, [rateContracts, masters, listDateFrom, listDateTo, listVendorId, listStatusQuick, colRcId, colRcDate, colRcDetails, colRcStatus]);
 
   const filteredRcGrns = useMemo(() => {
     return rcGrns.filter((grn) => {
@@ -919,11 +935,24 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
         <div
           className="grid w-full gap-0 border-b border-slate-100 bg-slate-50/80"
           style={{
-            gridTemplateColumns: 'minmax(0, 18%) minmax(0, 42%) minmax(0, 18%) minmax(0, 22%)',
+            gridTemplateColumns: 'minmax(0, 16%) minmax(0, 14%) minmax(0, 30%) minmax(0, 18%) minmax(0, 22%)',
           }}
           role="search"
           aria-label="Column filters"
         >
+          <div className="px-6 py-2 min-w-0">
+            {viewMode === 'RC' ? (
+              <input
+                type="text"
+                placeholder="Filter…"
+                value={colRcDate}
+                onChange={(e) => setColRcDate(e.target.value)}
+                className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
+              />
+            ) : (
+              <span className="text-[10px] text-slate-400 font-bold block py-1">—</span>
+            )}
+          </div>
           <div className="px-6 py-2 min-w-0">
             <input
               type="text"
@@ -1990,14 +2019,16 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
         <div className="bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden">
           <table className="w-full table-fixed text-left border-collapse">
             <colgroup>
-              <col style={{ width: '18%' }} />
-              <col style={{ width: '42%' }} />
+              <col style={{ width: '16%' }} />
+              <col style={{ width: '14%' }} />
+              <col style={{ width: '30%' }} />
               <col style={{ width: '18%' }} />
               <col style={{ width: '22%' }} />
             </colgroup>
             <thead>
               <tr className="bg-slate-50/50 border-b border-slate-100">
-                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">ID / Date</th>
+                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">transaction No.</th>
+                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Date</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Vendor Name</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Status</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Actions</th>
@@ -2008,7 +2039,9 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                 <tr key={rc.id} className="hover:bg-slate-50/50 transition-colors">
                   <td className="px-6 py-4">
                     <div className="text-sm font-black text-slate-900">{rc.id}</div>
-                    <div className="text-[10px] text-slate-400 font-bold">{new Date(rc.createdAt).toLocaleDateString()}</div>
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="text-sm font-bold text-slate-700">{rc.createdAt ? new Date(rc.createdAt).toLocaleDateString() : '—'}</div>
                   </td>
                   <td className="px-6 py-4">
                     <div className="text-sm font-bold text-slate-700">{(masters['Vendor'] || []).find(v => v.id === rc.vendorId)?.name}</div>
@@ -2129,6 +2162,9 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                       <div className="text-[10px] text-slate-400 font-bold">Against {grn.rateContractId}</div>
                     </td>
                     <td className="px-6 py-4">
+                      <div className="text-sm font-bold text-slate-700">{grn.createdAt ? new Date(grn.createdAt).toLocaleDateString() : '—'}</div>
+                    </td>
+                    <td className="px-6 py-4">
                       <div className="text-sm font-bold text-slate-700">{grn.location}</div>
                       <div className="text-xs text-slate-500">{grn.items.length} Items • Total: ₹{(Number(grn.amount) || 0).toFixed(2)}</div>
                     </td>
@@ -2241,6 +2277,9 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                     <div className="text-[10px] text-slate-400 font-bold">Against {inv.grnId}</div>
                   </td>
                   <td className="px-6 py-4">
+                    <div className="text-sm font-bold text-slate-700">{inv.createdAt ? new Date(inv.createdAt).toLocaleDateString() : '—'}</div>
+                  </td>
+                  <td className="px-6 py-4">
                     <div className="text-sm font-bold text-slate-700">{inv.location}</div>
                     <div className="text-xs text-slate-500">{new Date(inv.createdAt).toLocaleDateString()}</div>
                   </td>
@@ -2323,28 +2362,28 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                 (viewMode === 'GRN' && rcGrns.length === 0) ||
                 (viewMode === 'Invoice' && rcInvoices.length === 0)) && (
                 <tr>
-                  <td colSpan={4} className="px-6 py-12 text-center text-slate-400 font-medium">
+                  <td colSpan={5} className="px-6 py-12 text-center text-slate-400 font-medium">
                     No records found for {viewMode}
                   </td>
                 </tr>
               )}
               {viewMode === 'RC' && rateContracts.length > 0 && filteredRateContracts.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-6 py-12 text-center text-slate-500 text-sm font-bold">
+                  <td colSpan={5} className="px-6 py-12 text-center text-slate-500 text-sm font-bold">
                     No records match your filters.
                   </td>
                 </tr>
               )}
               {viewMode === 'GRN' && rcGrns.length > 0 && filteredRcGrns.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-6 py-12 text-center text-slate-500 text-sm font-bold">
+                  <td colSpan={5} className="px-6 py-12 text-center text-slate-500 text-sm font-bold">
                     No records match your filters.
                   </td>
                 </tr>
               )}
               {viewMode === 'Invoice' && rcInvoices.length > 0 && filteredRcInvoices.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-6 py-12 text-center text-slate-500 text-sm font-bold">
+                  <td colSpan={5} className="px-6 py-12 text-center text-slate-500 text-sm font-bold">
                     No records match your filters.
                   </td>
                 </tr>

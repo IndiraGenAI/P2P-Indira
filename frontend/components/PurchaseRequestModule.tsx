@@ -80,9 +80,9 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
   const [listDateTo, setListDateTo] = useState('');
   const [listVendorId, setListVendorId] = useState('');
   const [colPrId, setColPrId] = useState('');
+  const [colPrDate, setColPrDate] = useState('');
   const [colPrDept, setColPrDept] = useState('');
   const [colPrVendor, setColPrVendor] = useState('');
-  const [colPrItems, setColPrItems] = useState('');
   const [colPrAmt, setColPrAmt] = useState('');
   const [colPrStatus, setColPrStatus] = useState('');
   const [showAuditModal, setShowAuditModal] = useState(false);
@@ -115,10 +115,11 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
       if (!matchesVendorFilter(pr.vendorId, listVendorId)) return false;
       if (!matchesStatusQuickFilter(pr.status, listStatusQuick)) return false;
       if (!textIncludes(pr.id, colPrId)) return false;
+      const prDateText = pr.createdAt ? new Date(pr.createdAt).toLocaleDateString() : '';
+      if (!textIncludes(prDateText, colPrDate)) return false;
       if (!textIncludes(`${pr.department} ${pr.subDepartment}`, colPrDept)) return false;
       const vendorName = (masters['Vendor'] || []).find((v) => v.id === pr.vendorId)?.name ?? '';
       if (!textIncludes(vendorName, colPrVendor)) return false;
-      if (!textIncludes(pr.items.map((i) => i.itemName).join(' '), colPrItems)) return false;
       if (!textIncludes(String(pr.amount), colPrAmt)) return false;
       if (!textIncludes(pr.status, colPrStatus)) return false;
       return true;
@@ -130,9 +131,9 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
     listVendorId,
     listStatusQuick,
     colPrId,
+    colPrDate,
     colPrDept,
     colPrVendor,
-    colPrItems,
     colPrAmt,
     colPrStatus,
     masters,
@@ -700,7 +701,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
           <div
             className="grid w-full gap-0 border-b border-slate-100 bg-slate-50/80"
             style={{
-              gridTemplateColumns: 'minmax(0, 10%) minmax(0, 12%) minmax(0, 14%) minmax(0, 22%) minmax(0, 11%) minmax(0, 12%) minmax(0, 19%)',
+              gridTemplateColumns: 'minmax(0, 10%) minmax(0, 12%) minmax(0, 12%) minmax(0, 20%) minmax(0, 11%) minmax(0, 12%) minmax(0, 23%)',
             }}
             role="search"
             aria-label="Column filters"
@@ -711,6 +712,15 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
                 placeholder="Filter…"
                 value={colPrId}
                 onChange={(e) => setColPrId(e.target.value)}
+                className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
+              />
+            </div>
+            <div className="px-6 py-2 min-w-0">
+              <input
+                type="text"
+                placeholder="Filter…"
+                value={colPrDate}
+                onChange={(e) => setColPrDate(e.target.value)}
                 className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
               />
             </div>
@@ -729,15 +739,6 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
                 placeholder="Filter…"
                 value={colPrVendor}
                 onChange={(e) => setColPrVendor(e.target.value)}
-                className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
-              />
-            </div>
-            <div className="px-6 py-2 min-w-0">
-              <input
-                type="text"
-                placeholder="Filter…"
-                value={colPrItems}
-                onChange={(e) => setColPrItems(e.target.value)}
                 className="w-full min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px] font-medium"
               />
             </div>
@@ -766,18 +767,18 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
             <colgroup>
               <col style={{ width: '10%' }} />
               <col style={{ width: '12%' }} />
-              <col style={{ width: '14%' }} />
-              <col style={{ width: '22%' }} />
+              <col style={{ width: '12%' }} />
+              <col style={{ width: '20%' }} />
               <col style={{ width: '11%' }} />
               <col style={{ width: '12%' }} />
-              <col style={{ width: '19%' }} />
+              <col style={{ width: '23%' }} />
             </colgroup>
             <thead>
               <tr className="bg-slate-50/50 border-b border-slate-100">
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">PR ID</th>
+                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Date</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Dept</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Vendor</th>
-                <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Items</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Net Amount</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">Status</th>
                 <th className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Actions</th>
@@ -788,7 +789,9 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
                 <tr key={pr.id} className="hover:bg-slate-50/50 transition-colors group">
                   <td className="px-6 py-4">
                     <span className="text-sm font-black text-slate-900">{pr.id}</span>
-                    <div className="text-[10px] text-slate-400 font-bold">{new Date(pr.createdAt).toLocaleDateString()}</div>
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="text-sm font-bold text-slate-700">{pr.createdAt ? new Date(pr.createdAt).toLocaleDateString() : '—'}</div>
                   </td>
                   <td className="px-6 py-4">
                     <div className="text-xs text-slate-400 font-medium">{pr.department} - {pr.subDepartment}</div>
@@ -797,10 +800,15 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
                     <div className="text-sm font-bold text-slate-700 truncate" title={(masters['Vendor'] || []).find((v) => v.id === pr.vendorId)?.name}>
                       {(masters['Vendor'] || []).find((v) => v.id === pr.vendorId)?.name ?? '—'}
                     </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="text-sm font-bold text-slate-700">{pr.items.length} Items</div>
-                    <div className="text-xs text-slate-400 truncate max-w-[200px]">{pr.items.map(i => i.itemName).join(', ')}</div>
+                    <div className="text-xs text-slate-500 truncate">
+                      {(() => {
+                        const validItems = (pr.items || []).filter((i) => String(i.itemName || '').trim() !== '');
+                        if (validItems.length === 0) return 'No items';
+                        const first = validItems[0];
+                        const firstLabel = `${first.itemName} x ${Number(first.quantity) || 0}`;
+                        return validItems.length === 1 ? firstLabel : `${firstLabel} + ${validItems.length - 1} more`;
+                      })()}
+                    </div>
                   </td>
                   <td className="px-6 py-4">
                     <span className="text-sm font-black text-indigo-600">₹{pr.amount.toLocaleString()}</span>

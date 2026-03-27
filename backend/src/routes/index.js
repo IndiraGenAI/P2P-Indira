@@ -673,6 +673,317 @@ router.patch('/masters/:masterType/:id/workflow', async (req, res) => {
   }
 });
 
+function normalizeTopVendorParams(rawQuery = {}) {
+  const allowedDoc = new Set(['ALL', 'PO', 'RC', 'PR', 'DI']);
+  const allowedVendorType = new Set(['all', 'Micro', 'Small', 'Medium', 'Large']);
+  const allowedLimit = new Set([10, 20, 30, 50]);
+  const allowedSort = new Set([
+    'totalAmount',
+    'poAmount',
+    'rcAmount',
+    'prAmount',
+    'diAmount',
+    'transactionCount',
+    'poCount',
+    'rcCount',
+    'prCount',
+    'diCount',
+    'vendorName',
+  ]);
+
+  const documentType = String(rawQuery.documentType || 'ALL').toUpperCase();
+  const vendorTypeRaw = String(rawQuery.vendorType || 'all');
+  const vendorType = vendorTypeRaw === 'all' ? 'all' : vendorTypeRaw;
+  const limitParsed = Number(rawQuery.limit || 10);
+  const limit = allowedLimit.has(limitParsed) ? limitParsed : 10;
+  const sortByRaw = String(rawQuery.sortBy || '').trim();
+  const sortByDefault = documentType === 'PO'
+    ? 'poAmount'
+    : documentType === 'RC'
+      ? 'rcAmount'
+      : documentType === 'PR'
+        ? 'prAmount'
+        : documentType === 'DI'
+          ? 'diAmount'
+          : 'totalAmount';
+  const sortBy = allowedSort.has(sortByRaw) ? sortByRaw : sortByDefault;
+  const sortOrder = String(rawQuery.sortOrder || 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
+
+  return {
+    documentType: allowedDoc.has(documentType) ? documentType : 'ALL',
+    vendorType: allowedVendorType.has(vendorType) ? vendorType : 'all',
+    limit,
+    sortBy,
+    sortOrder,
+  };
+}
+
+async function fetchTopVendorsData(params) {
+  const {
+    documentType = 'ALL',
+    vendorType = 'all',
+    limit = 10,
+    sortBy = 'totalAmount',
+    sortOrder = 'desc',
+  } = params || {};
+
+  const approved = 'Approved';
+  const [
+    vendorsRes,
+    poRes,
+    rcRes,
+    prRes,
+    diRes,
+  ] = await Promise.all([
+    query(`
+      SELECT
+        id,
+        name,
+        COALESCE(data->>'vendorType', '') AS vendor_type
+      FROM masters
+      WHERE master_type = 'Vendor'
+    `),
+    query(`
+      SELECT
+        vendor_id,
+        SUM(COALESCE(amount, 0))::numeric AS amount,
+        COUNT(*)::int AS count
+      FROM purchase_orders
+      WHERE status = $1
+      GROUP BY vendor_id
+    `, [approved]),
+    query(`
+      SELECT
+        vendor_id,
+        SUM(COALESCE(amount, 0))::numeric AS amount,
+        COUNT(*)::int AS count
+      FROM rate_contracts
+      WHERE status = $1
+      GROUP BY vendor_id
+    `, [approved]),
+    query(`
+      SELECT
+        vendor_id,
+        SUM(COALESCE(amount, 0))::numeric AS amount,
+        COUNT(*)::int AS count
+      FROM purchase_requests
+      WHERE status = $1
+      GROUP BY vendor_id
+    `, [approved]),
+    query(`
+      SELECT
+        COALESCE(vs.data->>'vendorId', '') AS vendor_id,
+        SUM(COALESCE(di.amount, 0))::numeric AS amount,
+        COUNT(*)::int AS count
+      FROM direct_invoices di
+      LEFT JOIN masters vs
+        ON vs.master_type = 'Vendor Site'
+       AND vs.id = di.vendor_site_id
+      WHERE di.status = $1
+      GROUP BY COALESCE(vs.data->>'vendorId', '')
+    `, [approved]),
+  ]);
+
+  const toNum = (v) => Number(v || 0);
+  const poMap = new Map(poRes.rows.map((r) => [String(r.vendor_id || ''), { amount: toNum(r.amount), count: toNum(r.count) }]));
+  const rcMap = new Map(rcRes.rows.map((r) => [String(r.vendor_id || ''), { amount: toNum(r.amount), count: toNum(r.count) }]));
+  const prMap = new Map(prRes.rows.map((r) => [String(r.vendor_id || ''), { amount: toNum(r.amount), count: toNum(r.count) }]));
+  const diMap = new Map(diRes.rows.map((r) => [String(r.vendor_id || ''), { amount: toNum(r.amount), count: toNum(r.count) }]));
+
+  let vendors = vendorsRes.rows.map((v) => {
+    const vendorId = String(v.id || '');
+    const po = poMap.get(vendorId) || { amount: 0, count: 0 };
+    const rc = rcMap.get(vendorId) || { amount: 0, count: 0 };
+    const pr = prMap.get(vendorId) || { amount: 0, count: 0 };
+    const di = diMap.get(vendorId) || { amount: 0, count: 0 };
+    const totalAmount = po.amount + rc.amount + pr.amount + di.amount;
+    const transactionCount = po.count + rc.count + pr.count + di.count;
+    return {
+      vendorId,
+      vendorName: String(v.name || 'Unknown Vendor'),
+      vendorType: String(v.vendor_type || ''),
+      totalAmount,
+      poAmount: po.amount,
+      rcAmount: rc.amount,
+      prAmount: pr.amount,
+      diAmount: di.amount,
+      transactionCount,
+      poCount: po.count,
+      rcCount: rc.count,
+      prCount: pr.count,
+      diCount: di.count,
+    };
+  });
+
+  if (vendorType !== 'all') {
+    vendors = vendors.filter((v) => v.vendorType === vendorType);
+  }
+
+  const metricByDoc = {
+    ALL: 'totalAmount',
+    PO: 'poAmount',
+    RC: 'rcAmount',
+    PR: 'prAmount',
+    DI: 'diAmount',
+  };
+  const metricField = metricByDoc[documentType] || 'totalAmount';
+  vendors = vendors.filter((v) => Number(v[metricField] || 0) > 0);
+
+  const direction = sortOrder === 'asc' ? 1 : -1;
+  const numericFields = new Set([
+    'totalAmount', 'poAmount', 'rcAmount', 'prAmount', 'diAmount',
+    'transactionCount', 'poCount', 'rcCount', 'prCount', 'diCount',
+  ]);
+  vendors.sort((a, b) => {
+    if (!numericFields.has(sortBy)) {
+      return direction * String(a.vendorName || '').localeCompare(String(b.vendorName || ''));
+    }
+    const av = Number(a[sortBy] || 0);
+    const bv = Number(b[sortBy] || 0);
+    if (av === bv) return String(a.vendorName || '').localeCompare(String(b.vendorName || ''));
+    return direction * (av - bv);
+  });
+
+  const overallFilteredSpend = vendors.reduce((sum, v) => sum + Number(v.totalAmount || 0), 0);
+  const sliced = vendors.slice(0, limit);
+  const totalSpend = sliced.reduce((sum, v) => sum + Number(v.totalAmount || 0), 0);
+  const avgSpendPerVendor = sliced.length > 0 ? totalSpend / sliced.length : 0;
+
+  return {
+    vendors: sliced,
+    overallFilteredSpend,
+    summary: {
+      totalVendors: sliced.length,
+      totalSpend,
+      avgSpendPerVendor,
+    },
+  };
+}
+
+// --- DASHBOARD AGGREGATES (read-only counts; uses rate_contract_id / purchase_order_id / grn_id) ---
+router.get('/dashboard/stats', async (req, res) => {
+  try {
+    const count = (r) => Number(r.rows[0]?.c ?? 0);
+    const [
+      prPending,
+      rcPending,
+      poPending,
+      diPending,
+      grnPendingFromRC,
+      grnPendingFromPO,
+      invoicePendingFromRC,
+      invoicePendingFromPO,
+      totalRC,
+      totalGRNFromRC,
+      totalInvoiceFromRCGRN,
+      totalPO,
+      totalGRNFromPO,
+      totalInvoiceFromPOGRN,
+    ] = await Promise.all([
+      query(`SELECT COUNT(*)::int AS c FROM purchase_requests WHERE status = 'Pending'`),
+      query(`SELECT COUNT(*)::int AS c FROM rate_contracts WHERE status = 'Pending'`),
+      query(`SELECT COUNT(*)::int AS c FROM purchase_orders WHERE status = 'Pending'`),
+      query(`SELECT COUNT(*)::int AS c FROM direct_invoices WHERE status = 'Pending'`),
+      query(
+        `SELECT COUNT(*)::int AS c FROM grns WHERE status = 'Pending' AND rate_contract_id IS NOT NULL`
+      ),
+      query(
+        `SELECT COUNT(*)::int AS c FROM grns WHERE status = 'Pending' AND purchase_order_id IS NOT NULL`
+      ),
+      query(`
+        SELECT COUNT(*)::int AS c FROM invoices i
+        INNER JOIN grns g ON i.grn_id = g.id
+        WHERE i.status = 'Pending' AND g.rate_contract_id IS NOT NULL
+      `),
+      query(`
+        SELECT COUNT(*)::int AS c FROM invoices i
+        INNER JOIN grns g ON i.grn_id = g.id
+        WHERE i.status = 'Pending' AND g.purchase_order_id IS NOT NULL
+      `),
+      query(`SELECT COUNT(*)::int AS c FROM rate_contracts WHERE status = 'Approved'`),
+      query(`SELECT COUNT(*)::int AS c FROM grns WHERE rate_contract_id IS NOT NULL`),
+      query(`
+        SELECT COUNT(*)::int AS c FROM invoices i
+        INNER JOIN grns g ON i.grn_id = g.id
+        WHERE g.rate_contract_id IS NOT NULL
+      `),
+      query(`SELECT COUNT(*)::int AS c FROM purchase_orders WHERE status = 'Approved'`),
+      query(`SELECT COUNT(*)::int AS c FROM grns WHERE purchase_order_id IS NOT NULL`),
+      query(`
+        SELECT COUNT(*)::int AS c FROM invoices i
+        INNER JOIN grns g ON i.grn_id = g.id
+        WHERE g.purchase_order_id IS NOT NULL
+      `),
+    ]);
+    res.json({
+      pendingCounts: {
+        pr: count(prPending),
+        rc: count(rcPending),
+        po: count(poPending),
+        di: count(diPending),
+        grnFromRC: count(grnPendingFromRC),
+        grnFromPO: count(grnPendingFromPO),
+        invoiceFromRC: count(invoicePendingFromRC),
+        invoiceFromPO: count(invoicePendingFromPO),
+      },
+      rcComparison: {
+        totalRC: count(totalRC),
+        totalGRNFromRC: count(totalGRNFromRC),
+        totalInvoiceFromRCGRN: count(totalInvoiceFromRCGRN),
+      },
+      poComparison: {
+        totalPO: count(totalPO),
+        totalGRNFromPO: count(totalGRNFromPO),
+        totalInvoiceFromPOGRN: count(totalInvoiceFromPOGRN),
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get('/dashboard/top-vendors', async (req, res) => {
+  try {
+    const params = normalizeTopVendorParams(req.query || {});
+    const result = await fetchTopVendorsData(params);
+    res.json({
+      vendors: result.vendors,
+      filters: {
+        documentType: params.documentType,
+        vendorType: params.vendorType,
+        limit: params.limit,
+        sortBy: params.sortBy,
+        sortOrder: params.sortOrder,
+      },
+      summary: result.summary,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+router.get('/dashboard/top-vendors-summary', async (req, res) => {
+  try {
+    const result = await fetchTopVendorsData({
+      documentType: 'ALL',
+      vendorType: 'all',
+      limit: 3,
+      sortBy: 'totalAmount',
+      sortOrder: 'desc',
+    });
+    const topVendors = result.vendors.map((v) => ({
+      name: v.vendorName,
+      totalAmount: v.totalAmount,
+    }));
+    res.json({
+      topVendors,
+      totalVendorSpend: result.overallFilteredSpend,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // --- PURCHASE REQUESTS ---
 const PR_COLS = ['id', 'entity_name', 'vendor_id', 'vendor_site_id', 'transaction_type', 'valid_from', 'valid_to', 'frequency', 'department', 'sub_department', 'payment_terms', 'terms_and_conditions_id', 'center_names', 'items', 'amount', 'remarks', 'overall_summary', 'attachments', 'workflow_step_history', 'status', 'current_step_index', 'is_unbudgeted', 'unbudgeted_justification', 'unbudgeted_attachment_url', 'rejection_remarks', 'created_by', 'created_at', 'required_date', 'shipping_address_id', 'billing_address_id'];
 router.get('/purchase-requests', async (req, res) => {
