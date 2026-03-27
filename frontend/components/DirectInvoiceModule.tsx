@@ -20,6 +20,12 @@ import MultiSelect from './MultiSelect';
 import TransactionListFilterBar, { ListStatusQuick } from './TransactionListFilterBar';
 import DocumentAuditLogModal from './DocumentAuditLogModal';
 
+export type DirectInvoiceModuleEntryIntent = {
+  key: number;
+  listStatusQuick: ListStatusQuick;
+  openDocumentId?: string;
+} | null;
+
 interface DirectInvoiceModuleProps {
   masters: Record<MasterType, MasterRecord[]>;
   currentUser: User;
@@ -29,9 +35,22 @@ interface DirectInvoiceModuleProps {
   directInvoices: Invoice[];
   setDirectInvoices: React.Dispatch<React.SetStateAction<Invoice[]>>;
   workflowV2Rules?: WorkflowV2Rule[];
+  moduleEntryIntent?: DirectInvoiceModuleEntryIntent;
+  onModuleEntryIntentConsumed?: () => void;
 }
 
-const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, currentUser, workflows, budgets, setBudgets, directInvoices, setDirectInvoices, workflowV2Rules = [] }) => {
+const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
+  masters,
+  currentUser,
+  workflows,
+  budgets,
+  setBudgets,
+  directInvoices,
+  setDirectInvoices,
+  workflowV2Rules = [],
+  moduleEntryIntent = null,
+  onModuleEntryIntentConsumed,
+}) => {
   const vendorsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Vendor', masters.Vendor ?? []) as MasterRecord[];
   const itemsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Item', masters.Item ?? []) as MasterRecord[];
   const budgetsForDeduction = filterByWorkflowApproval<Budget>(workflowV2Rules, 'Budget', budgets);
@@ -56,6 +75,15 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({ masters, curr
       { action, userId: currentUser.id, at: new Date().toISOString(), stepIndex: doc.currentStepIndex }
     ]
   });
+
+  useEffect(() => {
+    if (!moduleEntryIntent) return;
+    setListStatusQuick(moduleEntryIntent.listStatusQuick);
+    if (moduleEntryIntent.openDocumentId) {
+      setColInvId(moduleEntryIntent.openDocumentId);
+    }
+    onModuleEntryIntentConsumed?.();
+  }, [moduleEntryIntent?.key]);
 
   const diApprovedCount = useMemo(
     () => directInvoices.filter((i) => i.status === 'Approved').length,

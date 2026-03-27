@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
   PurchaseRequest, MasterRecord, MasterType, 
   Attachment, ItemLine, Frequency,
@@ -20,6 +20,12 @@ import TransactionListFilterBar, { ListStatusQuick } from './TransactionListFilt
 import { AlertCircle, Info } from 'lucide-react';
 import DocumentAuditLogModal from './DocumentAuditLogModal';
 
+export type PurchaseRequestModuleEntryIntent = {
+  key: number;
+  listStatusQuick: ListStatusQuick;
+  openDocumentId?: string;
+} | null;
+
 interface PurchaseRequestModuleProps {
   masters: Record<MasterType, MasterRecord[]>;
   purchaseRequests: PurchaseRequest[];
@@ -29,10 +35,14 @@ interface PurchaseRequestModuleProps {
   workflows: WorkflowRule[];
   budgets: Budget[];
   workflowV2Rules?: WorkflowV2Rule[];
+  moduleEntryIntent?: PurchaseRequestModuleEntryIntent;
+  onModuleEntryIntentConsumed?: () => void;
 }
 
 const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({ 
-  masters, purchaseRequests, setPurchaseRequests, onCreatePO, currentUser, workflows, budgets, workflowV2Rules = []
+  masters, purchaseRequests, setPurchaseRequests, onCreatePO, currentUser, workflows, budgets, workflowV2Rules = [],
+  moduleEntryIntent = null,
+  onModuleEntryIntentConsumed,
 }) => {
   const getTodayISTDate = () => {
     const parts = new Intl.DateTimeFormat('en-CA', {
@@ -95,6 +105,15 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
       { action, userId: currentUser.id, at: new Date().toISOString(), stepIndex: doc.currentStepIndex }
     ]
   });
+
+  useEffect(() => {
+    if (!moduleEntryIntent) return;
+    setListStatusQuick(moduleEntryIntent.listStatusQuick);
+    if (moduleEntryIntent.openDocumentId) {
+      setColPrId(moduleEntryIntent.openDocumentId);
+    }
+    onModuleEntryIntentConsumed?.();
+  }, [moduleEntryIntent?.key]);
 
   const prApprovedCount = useMemo(
     () => purchaseRequests.filter((p) => p.status === 'Approved').length,

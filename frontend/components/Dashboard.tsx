@@ -19,11 +19,31 @@ export interface DashboardStatsPayload {
   poComparison: { totalPO: number; totalGRNFromPO: number; totalInvoiceFromPOGRN: number };
 }
 
+export interface DashboardAgingDoc {
+  docNo: string;
+  approvedDate: string;
+  vendorName: string;
+  amount: number;
+  agingDays: number;
+}
+
+export interface DashboardAgingSection {
+  label: string;
+  documents: DashboardAgingDoc[];
+}
+
+export type DashboardAgingPayload = {
+  pr: DashboardAgingSection;
+  rc: DashboardAgingSection;
+  po: DashboardAgingSection;
+  di: DashboardAgingSection;
+};
+
 export type DashboardNavigatePayload =
-  | { tab: 'purchase_request' }
-  | { tab: 'direct_invoice' }
-  | { tab: 'rate_contract'; viewMode?: 'RC' | 'GRN' | 'Invoice' }
-  | { tab: 'purchase_order'; viewMode?: 'PO' | 'GRN' | 'Invoice' };
+  | { tab: 'purchase_request'; focusDocumentId?: string }
+  | { tab: 'direct_invoice'; focusDocumentId?: string }
+  | { tab: 'rate_contract'; viewMode?: 'RC' | 'GRN' | 'Invoice'; openDocumentId?: string }
+  | { tab: 'purchase_order'; viewMode?: 'PO' | 'GRN' | 'Invoice'; openDocumentId?: string };
 
 interface DashboardProps {
   users: User[];
@@ -60,10 +80,27 @@ function pendingCountBadgeSub(n: number): string {
     : 'inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-xl bg-[#F0FDF4] px-2.5 py-1 text-[15px] font-bold tabular-nums text-[#16A34A]';
 }
 
+function agingDaysToneClass(days: number): string {
+  if (days <= 7) return 'text-emerald-600';
+  if (days <= 14) return 'text-amber-600';
+  if (days <= 30) return 'text-orange-600';
+  return 'text-red-600';
+}
+
+function formatAgingDate(iso: string): string {
+  if (!iso) return '—';
+  const d = new Date(`${iso.slice(0, 10)}T12:00:00`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
 const Dashboard: React.FC<DashboardProps> = ({ users, roles, onNavigateFromDashboard }) => {
   const [dashboardStats, setDashboardStats] = useState<DashboardStatsPayload | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
   const [showPendingModal, setShowPendingModal] = useState(false);
+  const [agingData, setAgingData] = useState<DashboardAgingPayload | null>(null);
+  const [agingLoading, setAgingLoading] = useState(false);
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
 
   const stats = [
     { label: 'System Users', value: users.length, color: 'text-indigo-600', bg: 'bg-indigo-50' },
@@ -105,6 +142,35 @@ const Dashboard: React.FC<DashboardProps> = ({ users, roles, onNavigateFromDashb
       clearInterval(interval);
     };
   }, []);
+
+  useEffect(() => {
+    if (!showPendingModal) {
+      setExpandedSections(new Set());
+      return;
+    }
+    let cancelled = false;
+    setAgingLoading(true);
+    apiGet<DashboardAgingPayload>('dashboard/aging')
+      .then((data) => {
+        if (!cancelled) setAgingData(data);
+      })
+      .catch((err) => console.error('Aging fetch failed:', err))
+      .finally(() => {
+        if (!cancelled) setAgingLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showPendingModal]);
+
+  function toggleSection(key: string) {
+    setExpandedSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   const deptMap: Record<string, number> = {};
   users.forEach(u => {
@@ -339,42 +405,178 @@ const Dashboard: React.FC<DashboardProps> = ({ users, roles, onNavigateFromDashb
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-8 py-8">
               <div className="flex flex-col gap-4">
-                <button
-                  type="button"
-                  onClick={() => {
-                    onNavigateFromDashboard({ tab: 'purchase_request' });
-                    setShowPendingModal(false);
-                  }}
-                  className="flex min-h-[56px] w-full cursor-pointer items-center justify-between border-b border-[#F1F5F9] bg-white py-4 pl-5 pr-5 text-left transition-colors duration-150 ease-in-out hover:bg-[#EFF6FF] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                <div
+                  className="overflow-hidden rounded-xl border-b border-[#F1F5F9] bg-white"
                   style={{ borderLeft: '4px solid #3B82F6' }}
                 >
-                  <span className="text-base font-semibold text-[#0F172A]">Purchase Request Pending</span>
-                  <span className={pendingCountBadgeMain(p?.pr ?? 0)}>{p?.pr ?? 0}</span>
-                </button>
+                  <div className="flex min-h-[56px] w-full items-stretch">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onNavigateFromDashboard({ tab: 'purchase_request' });
+                        setShowPendingModal(false);
+                      }}
+                      className="flex min-h-[56px] min-w-0 flex-1 cursor-pointer items-center justify-between py-4 pl-5 pr-3 text-left transition-colors duration-150 ease-in-out hover:bg-[#EFF6FF] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                    >
+                      <span className="text-base font-semibold text-[#0F172A]">Purchase Request Pending</span>
+                      <span className={pendingCountBadgeMain(p?.pr ?? 0)}>{p?.pr ?? 0}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleSection('pr')}
+                      className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-full text-slate-500 transition-colors duration-150 ease-in-out hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                      aria-expanded={expandedSections.has('pr')}
+                      aria-label={expandedSections.has('pr') ? 'Collapse aging' : 'Expand aging'}
+                    >
+                      <span
+                        className={`inline-block text-[20px] leading-none transition-transform duration-200 ease-out ${expandedSections.has('pr') ? 'rotate-180' : ''}`}
+                        aria-hidden
+                      >
+                        ▼
+                      </span>
+                    </button>
+                  </div>
+                  {expandedSections.has('pr') && (
+                    <div className="border-t border-[#F1F5F9] bg-[#F8FAFC] px-5 py-4 pl-12 transition-opacity duration-200 ease-out">
+                      {agingLoading ? (
+                        <p className="text-sm font-medium text-slate-500">Loading aging data…</p>
+                      ) : agingData?.pr.documents && agingData.pr.documents.length > 0 ? (
+                        <>
+                          <p className="mb-3 text-[13px] font-semibold text-slate-600">
+                            {agingData.pr.label} ({agingData.pr.documents.length} documents)
+                          </p>
+                          <div className="overflow-x-auto">
+                            <table className="w-full border-collapse text-[13px]">
+                              <thead>
+                                <tr className="border-b-2 border-slate-200">
+                                  <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Doc No</th>
+                                  <th className="px-3 py-2 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-500">Approved On</th>
+                                  <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Vendor</th>
+                                  <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500">Amount</th>
+                                  <th className="px-3 py-2 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-500">Aging</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {agingData.pr.documents.map((doc) => (
+                                  <tr key={doc.docNo} className="border-b border-slate-100">
+                                    <td className="px-3 py-2.5">
+                                      <button
+                                        type="button"
+                                        className="font-semibold text-blue-600 hover:underline"
+                                        onClick={() => {
+                                          onNavigateFromDashboard({ tab: 'purchase_request', focusDocumentId: doc.docNo });
+                                          setShowPendingModal(false);
+                                        }}
+                                      >
+                                        {doc.docNo}
+                                      </button>
+                                    </td>
+                                    <td className="px-3 py-2.5 text-center text-slate-600">{formatAgingDate(doc.approvedDate)}</td>
+                                    <td className="px-3 py-2.5 text-slate-700">{doc.vendorName}</td>
+                                    <td className="px-3 py-2.5 text-right font-medium text-slate-900">
+                                      ₹{doc.amount.toLocaleString('en-IN')}
+                                    </td>
+                                    <td className={`px-3 py-2.5 text-center font-semibold ${agingDaysToneClass(doc.agingDays)}`}>
+                                      {doc.agingDays} days
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      ) : (
+                        <p className="text-sm font-medium text-emerald-600">✓ No documents awaiting action</p>
+                      )}
+                    </div>
+                  )}
+                </div>
 
                 <div
                   className="overflow-hidden rounded-xl border-b border-[#F1F5F9] bg-white"
                   style={{ borderLeft: '4px solid #10B981' }}
                 >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onNavigateFromDashboard({ tab: 'rate_contract', viewMode: 'RC' });
-                      setShowPendingModal(false);
-                    }}
-                    className="flex min-h-[56px] w-full cursor-pointer items-center justify-between py-4 pl-5 pr-4 text-left transition-colors duration-150 ease-in-out hover:bg-[#EFF6FF] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
-                  >
-                    <span className="text-base font-semibold text-[#0F172A]">Rate Contract Pending</span>
-                    <div className="flex items-center gap-3">
+                  <div className="flex min-h-[56px] w-full items-stretch">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onNavigateFromDashboard({ tab: 'rate_contract', viewMode: 'RC' });
+                        setShowPendingModal(false);
+                      }}
+                      className="flex min-h-[56px] min-w-0 flex-1 cursor-pointer items-center justify-between py-4 pl-5 pr-3 text-left transition-colors duration-150 ease-in-out hover:bg-[#EFF6FF] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                    >
+                      <span className="text-base font-semibold text-[#0F172A]">Rate Contract Pending</span>
                       <span className={pendingCountBadgeMain(p?.rc ?? 0)}>{p?.rc ?? 0}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleSection('rc')}
+                      className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-full text-slate-500 transition-colors duration-150 ease-in-out hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                      aria-expanded={expandedSections.has('rc')}
+                      aria-label={expandedSections.has('rc') ? 'Collapse aging' : 'Expand aging'}
+                    >
                       <span
-                        className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-500 transition-colors duration-150 ease-in-out hover:bg-slate-100"
+                        className={`inline-block text-[20px] leading-none transition-transform duration-200 ease-out ${expandedSections.has('rc') ? 'rotate-180' : ''}`}
                         aria-hidden
                       >
-                        <span className="text-[20px] leading-none">▼</span>
+                        ▼
                       </span>
+                    </button>
+                  </div>
+                  {expandedSections.has('rc') && (
+                    <div className="border-t border-[#F1F5F9] bg-[#F8FAFC] px-5 py-4 pl-12 transition-opacity duration-200 ease-out">
+                      {agingLoading ? (
+                        <p className="text-sm font-medium text-slate-500">Loading aging data…</p>
+                      ) : agingData?.rc.documents && agingData.rc.documents.length > 0 ? (
+                        <>
+                          <p className="mb-3 text-[13px] font-semibold text-slate-600">
+                            {agingData.rc.label} ({agingData.rc.documents.length} documents)
+                          </p>
+                          <div className="overflow-x-auto">
+                            <table className="w-full border-collapse text-[13px]">
+                              <thead>
+                                <tr className="border-b-2 border-slate-200">
+                                  <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Doc No</th>
+                                  <th className="px-3 py-2 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-500">Approved On</th>
+                                  <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Vendor</th>
+                                  <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500">Amount</th>
+                                  <th className="px-3 py-2 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-500">Aging</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {agingData.rc.documents.map((doc) => (
+                                  <tr key={doc.docNo} className="border-b border-slate-100">
+                                    <td className="px-3 py-2.5">
+                                      <button
+                                        type="button"
+                                        className="font-semibold text-blue-600 hover:underline"
+                                        onClick={() => {
+                                          onNavigateFromDashboard({ tab: 'rate_contract', viewMode: 'RC', openDocumentId: doc.docNo });
+                                          setShowPendingModal(false);
+                                        }}
+                                      >
+                                        {doc.docNo}
+                                      </button>
+                                    </td>
+                                    <td className="px-3 py-2.5 text-center text-slate-600">{formatAgingDate(doc.approvedDate)}</td>
+                                    <td className="px-3 py-2.5 text-slate-700">{doc.vendorName}</td>
+                                    <td className="px-3 py-2.5 text-right font-medium text-slate-900">
+                                      ₹{doc.amount.toLocaleString('en-IN')}
+                                    </td>
+                                    <td className={`px-3 py-2.5 text-center font-semibold ${agingDaysToneClass(doc.agingDays)}`}>
+                                      {doc.agingDays} days
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      ) : (
+                        <p className="text-sm font-medium text-emerald-600">✓ No documents awaiting action</p>
+                      )}
                     </div>
-                  </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => {
@@ -411,25 +613,87 @@ const Dashboard: React.FC<DashboardProps> = ({ users, roles, onNavigateFromDashb
                   className="overflow-hidden rounded-xl border-b border-[#F1F5F9] bg-white"
                   style={{ borderLeft: '4px solid #8B5CF6' }}
                 >
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onNavigateFromDashboard({ tab: 'purchase_order', viewMode: 'PO' });
-                      setShowPendingModal(false);
-                    }}
-                    className="flex min-h-[56px] w-full cursor-pointer items-center justify-between py-4 pl-5 pr-4 text-left transition-colors duration-150 ease-in-out hover:bg-[#EFF6FF] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
-                  >
-                    <span className="text-base font-semibold text-[#0F172A]">Purchase Order Pending</span>
-                    <div className="flex items-center gap-3">
+                  <div className="flex min-h-[56px] w-full items-stretch">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onNavigateFromDashboard({ tab: 'purchase_order', viewMode: 'PO' });
+                        setShowPendingModal(false);
+                      }}
+                      className="flex min-h-[56px] min-w-0 flex-1 cursor-pointer items-center justify-between py-4 pl-5 pr-3 text-left transition-colors duration-150 ease-in-out hover:bg-[#EFF6FF] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                    >
+                      <span className="text-base font-semibold text-[#0F172A]">Purchase Order Pending</span>
                       <span className={pendingCountBadgeMain(p?.po ?? 0)}>{p?.po ?? 0}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleSection('po')}
+                      className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-full text-slate-500 transition-colors duration-150 ease-in-out hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                      aria-expanded={expandedSections.has('po')}
+                      aria-label={expandedSections.has('po') ? 'Collapse aging' : 'Expand aging'}
+                    >
                       <span
-                        className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-slate-500 transition-colors duration-150 ease-in-out hover:bg-slate-100"
+                        className={`inline-block text-[20px] leading-none transition-transform duration-200 ease-out ${expandedSections.has('po') ? 'rotate-180' : ''}`}
                         aria-hidden
                       >
-                        <span className="text-[20px] leading-none">▼</span>
+                        ▼
                       </span>
+                    </button>
+                  </div>
+                  {expandedSections.has('po') && (
+                    <div className="border-t border-[#F1F5F9] bg-[#F8FAFC] px-5 py-4 pl-12 transition-opacity duration-200 ease-out">
+                      {agingLoading ? (
+                        <p className="text-sm font-medium text-slate-500">Loading aging data…</p>
+                      ) : agingData?.po.documents && agingData.po.documents.length > 0 ? (
+                        <>
+                          <p className="mb-3 text-[13px] font-semibold text-slate-600">
+                            {agingData.po.label} ({agingData.po.documents.length} documents)
+                          </p>
+                          <div className="overflow-x-auto">
+                            <table className="w-full border-collapse text-[13px]">
+                              <thead>
+                                <tr className="border-b-2 border-slate-200">
+                                  <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Doc No</th>
+                                  <th className="px-3 py-2 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-500">Approved On</th>
+                                  <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Vendor</th>
+                                  <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500">Amount</th>
+                                  <th className="px-3 py-2 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-500">Aging</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {agingData.po.documents.map((doc) => (
+                                  <tr key={doc.docNo} className="border-b border-slate-100">
+                                    <td className="px-3 py-2.5">
+                                      <button
+                                        type="button"
+                                        className="font-semibold text-blue-600 hover:underline"
+                                        onClick={() => {
+                                          onNavigateFromDashboard({ tab: 'purchase_order', viewMode: 'PO', openDocumentId: doc.docNo });
+                                          setShowPendingModal(false);
+                                        }}
+                                      >
+                                        {doc.docNo}
+                                      </button>
+                                    </td>
+                                    <td className="px-3 py-2.5 text-center text-slate-600">{formatAgingDate(doc.approvedDate)}</td>
+                                    <td className="px-3 py-2.5 text-slate-700">{doc.vendorName}</td>
+                                    <td className="px-3 py-2.5 text-right font-medium text-slate-900">
+                                      ₹{doc.amount.toLocaleString('en-IN')}
+                                    </td>
+                                    <td className={`px-3 py-2.5 text-center font-semibold ${agingDaysToneClass(doc.agingDays)}`}>
+                                      {doc.agingDays} days
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      ) : (
+                        <p className="text-sm font-medium text-emerald-600">✓ No documents awaiting action</p>
+                      )}
                     </div>
-                  </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => {
@@ -462,18 +726,92 @@ const Dashboard: React.FC<DashboardProps> = ({ users, roles, onNavigateFromDashb
                   </button>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    onNavigateFromDashboard({ tab: 'direct_invoice' });
-                    setShowPendingModal(false);
-                  }}
-                  className="flex min-h-[56px] w-full cursor-pointer items-center justify-between border-b border-[#F1F5F9] bg-white py-4 pl-5 pr-5 text-left transition-colors duration-150 ease-in-out hover:bg-[#EFF6FF] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                <div
+                  className="overflow-hidden rounded-xl border-b border-[#F1F5F9] bg-white"
                   style={{ borderLeft: '4px solid #F59E0B' }}
                 >
-                  <span className="text-base font-semibold text-[#0F172A]">Direct Invoice Pending</span>
-                  <span className={pendingCountBadgeMain(p?.di ?? 0)}>{p?.di ?? 0}</span>
-                </button>
+                  <div className="flex min-h-[56px] w-full items-stretch">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onNavigateFromDashboard({ tab: 'direct_invoice' });
+                        setShowPendingModal(false);
+                      }}
+                      className="flex min-h-[56px] min-w-0 flex-1 cursor-pointer items-center justify-between py-4 pl-5 pr-3 text-left transition-colors duration-150 ease-in-out hover:bg-[#EFF6FF] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                    >
+                      <span className="text-base font-semibold text-[#0F172A]">Direct Invoice Pending</span>
+                      <span className={pendingCountBadgeMain(p?.di ?? 0)}>{p?.di ?? 0}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleSection('di')}
+                      className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-full text-slate-500 transition-colors duration-150 ease-in-out hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-500"
+                      aria-expanded={expandedSections.has('di')}
+                      aria-label={expandedSections.has('di') ? 'Collapse aging' : 'Expand aging'}
+                    >
+                      <span
+                        className={`inline-block text-[20px] leading-none transition-transform duration-200 ease-out ${expandedSections.has('di') ? 'rotate-180' : ''}`}
+                        aria-hidden
+                      >
+                        ▼
+                      </span>
+                    </button>
+                  </div>
+                  {expandedSections.has('di') && (
+                    <div className="border-t border-[#F1F5F9] bg-[#F8FAFC] px-5 py-4 pl-12 transition-opacity duration-200 ease-out">
+                      {agingLoading ? (
+                        <p className="text-sm font-medium text-slate-500">Loading aging data…</p>
+                      ) : agingData?.di.documents && agingData.di.documents.length > 0 ? (
+                        <>
+                          <p className="mb-3 text-[13px] font-semibold text-slate-600">
+                            {agingData.di.label} ({agingData.di.documents.length} documents)
+                          </p>
+                          <div className="overflow-x-auto">
+                            <table className="w-full border-collapse text-[13px]">
+                              <thead>
+                                <tr className="border-b-2 border-slate-200">
+                                  <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Doc No</th>
+                                  <th className="px-3 py-2 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-500">Approved On</th>
+                                  <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-slate-500">Vendor</th>
+                                  <th className="px-3 py-2 text-right text-[11px] font-semibold uppercase tracking-wide text-slate-500">Amount</th>
+                                  <th className="px-3 py-2 text-center text-[11px] font-semibold uppercase tracking-wide text-slate-500">Aging</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {agingData.di.documents.map((doc) => (
+                                  <tr key={doc.docNo} className="border-b border-slate-100">
+                                    <td className="px-3 py-2.5">
+                                      <button
+                                        type="button"
+                                        className="font-semibold text-blue-600 hover:underline"
+                                        onClick={() => {
+                                          onNavigateFromDashboard({ tab: 'direct_invoice', focusDocumentId: doc.docNo });
+                                          setShowPendingModal(false);
+                                        }}
+                                      >
+                                        {doc.docNo}
+                                      </button>
+                                    </td>
+                                    <td className="px-3 py-2.5 text-center text-slate-600">{formatAgingDate(doc.approvedDate)}</td>
+                                    <td className="px-3 py-2.5 text-slate-700">{doc.vendorName}</td>
+                                    <td className="px-3 py-2.5 text-right font-medium text-slate-900">
+                                      ₹{doc.amount.toLocaleString('en-IN')}
+                                    </td>
+                                    <td className={`px-3 py-2.5 text-center font-semibold ${agingDaysToneClass(doc.agingDays)}`}>
+                                      {doc.agingDays} days
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      ) : (
+                        <p className="text-sm font-medium text-emerald-600">✓ No documents awaiting action</p>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>

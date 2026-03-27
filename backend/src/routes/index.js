@@ -942,6 +942,119 @@ router.get('/dashboard/stats', async (req, res) => {
   }
 });
 
+/** Approved documents idle awaiting the next step (no downstream doc yet). */
+router.get('/dashboard/aging', async (req, res) => {
+  const approvedExpr = (alias) => `
+    COALESCE(
+      (
+        SELECT MAX((elem->>'at')::timestamptz)
+        FROM jsonb_array_elements(COALESCE(${alias}.workflow_step_history, '[]'::jsonb)) AS elem
+        WHERE elem->>'action' = 'approve'
+      ),
+      ${alias}.created_at
+    )
+  `;
+
+  const mapAgingRows = (rows) =>
+    rows.map((row) => {
+      const approvedAt = row.approved_at;
+      let d = approvedAt;
+      if (d instanceof Date) {
+        d = d.toISOString().slice(0, 10);
+      } else if (typeof d === 'string') {
+        d = d.slice(0, 10);
+      } else {
+        d = new Date().toISOString().slice(0, 10);
+      }
+      const agingDays = Math.max(
+        0,
+        Math.floor(
+          (Date.now() - new Date(`${d}T12:00:00Z`).getTime()) / (24 * 60 * 60 * 1000)
+        )
+      );
+      return {
+        docNo: row.id,
+        approvedDate: d,
+        vendorName: row.vendor_name || '—',
+        amount: Number(row.amount) || 0,
+        agingDays,
+      };
+    });
+
+  try {
+    const [prRes, rcRes, poRes, diRes] = await Promise.all([
+      query(`
+        SELECT
+          pr.id,
+          pr.amount,
+          v.name AS vendor_name,
+          ${approvedExpr('pr')} AS approved_at
+        FROM purchase_requests pr
+        LEFT JOIN masters v ON v.master_type = 'Vendor' AND v.id = pr.vendor_id
+        WHERE pr.status = 'Approved'
+        ORDER BY ${approvedExpr('pr')} ASC NULLS LAST
+      `),
+      query(`
+        SELECT
+          rc.id,
+          rc.amount,
+          v.name AS vendor_name,
+          ${approvedExpr('rc')} AS approved_at
+        FROM rate_contracts rc
+        LEFT JOIN masters v ON v.master_type = 'Vendor' AND v.id = rc.vendor_id
+        WHERE rc.status = 'Approved'
+          AND NOT EXISTS (SELECT 1 FROM grns g WHERE g.rate_contract_id = rc.id)
+        ORDER BY ${approvedExpr('rc')} ASC NULLS LAST
+      `),
+      query(`
+        SELECT
+          po.id,
+          po.amount,
+          v.name AS vendor_name,
+          ${approvedExpr('po')} AS approved_at
+        FROM purchase_orders po
+        LEFT JOIN masters v ON v.master_type = 'Vendor' AND v.id = po.vendor_id
+        WHERE po.status = 'Approved'
+          AND NOT EXISTS (SELECT 1 FROM grns g WHERE g.purchase_order_id = po.id)
+        ORDER BY ${approvedExpr('po')} ASC NULLS LAST
+      `),
+      query(`
+        SELECT
+          di.id,
+          di.amount,
+          COALESCE(v.name, '—') AS vendor_name,
+          ${approvedExpr('di')} AS approved_at
+        FROM direct_invoices di
+        LEFT JOIN masters mvs ON mvs.master_type = 'Vendor Site' AND mvs.id = di.vendor_site_id
+        LEFT JOIN masters v ON v.master_type = 'Vendor' AND v.id = NULLIF(TRIM(mvs.data->>'vendorId'), '')
+        WHERE di.status = 'Approved'
+        ORDER BY ${approvedExpr('di')} ASC NULLS LAST
+      `),
+    ]);
+
+    res.json({
+      pr: {
+        label: 'Awaiting PO/RC Creation',
+        documents: mapAgingRows(prRes.rows),
+      },
+      rc: {
+        label: 'Awaiting GRN Creation',
+        documents: mapAgingRows(rcRes.rows),
+      },
+      po: {
+        label: 'Awaiting GRN Creation',
+        documents: mapAgingRows(poRes.rows),
+      },
+      di: {
+        label: 'Awaiting Processing',
+        documents: mapAgingRows(diRes.rows),
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 router.get('/dashboard/top-vendors', async (req, res) => {
   try {
     const params = normalizeTopVendorParams(req.query || {});

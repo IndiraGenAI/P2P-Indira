@@ -36,7 +36,12 @@ interface RateContractModuleProps {
   workflows: WorkflowRule[];
   workflowV2Rules?: WorkflowV2Rule[];
   /** One-shot navigation from Dashboard (view + list filter); consumed after apply. */
-  moduleEntryIntent?: { key: number; viewMode: ViewMode; listStatusQuick: ListStatusQuick } | null;
+  moduleEntryIntent?: {
+    key: number;
+    viewMode: ViewMode;
+    listStatusQuick: ListStatusQuick;
+    openDocumentId?: string;
+  } | null;
   onModuleEntryIntentConsumed?: () => void;
 }
 
@@ -145,6 +150,19 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
     ]
   } as T);
 
+  const normalizeRcForForm = (rc: RateContract): RateContract => ({
+    ...rc,
+    items: (rc.items || []).map((item) => {
+      const centers = item.centerNames?.length ? item.centerNames : item.centerName ? [item.centerName] : [];
+      const locked = item.centerNamesLocked?.length ? item.centerNamesLocked : centers;
+      return {
+        ...item,
+        centerNames: centers,
+        centerNamesLocked: locked,
+      };
+    }),
+  });
+
   useEffect(() => {
     setListStatusQuick('pending');
     setListDateFrom('');
@@ -165,8 +183,23 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
   useEffect(() => {
     if (!moduleEntryIntent) return;
     setViewMode(moduleEntryIntent.viewMode);
-    setListStatusQuick(moduleEntryIntent.listStatusQuick);
-    onModuleEntryIntentConsumed?.();
+    const tid = window.setTimeout(() => {
+      setListStatusQuick(
+        moduleEntryIntent.openDocumentId
+          ? moduleEntryIntent.listStatusQuick ?? 'approved'
+          : moduleEntryIntent.listStatusQuick
+      );
+      if (moduleEntryIntent.openDocumentId && moduleEntryIntent.viewMode === 'RC') {
+        const rc = rateContracts.find((r) => r.id === moduleEntryIntent.openDocumentId);
+        if (rc) {
+          setColRcId(moduleEntryIntent.openDocumentId);
+          setRcForm(normalizeRcForForm(rc));
+          setShowForm(true);
+        }
+      }
+      onModuleEntryIntentConsumed?.();
+    }, 0);
+    return () => clearTimeout(tid);
   }, [moduleEntryIntent?.key]);
 
   // Update total amount whenever items change
@@ -862,19 +895,6 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
       return true;
     });
   }, [rcInvoices, grns, rateContracts, masters, listDateFrom, listDateTo, listVendorId, listStatusQuick, colInvId, colInvDetails, colInvStatus]);
-
-  const normalizeRcForForm = (rc: RateContract): RateContract => ({
-    ...rc,
-    items: (rc.items || []).map(item => {
-      const centers = item.centerNames?.length ? item.centerNames : (item.centerName ? [item.centerName] : []);
-      const locked = item.centerNamesLocked?.length ? item.centerNamesLocked : centers;
-      return {
-        ...item,
-        centerNames: centers,
-        centerNamesLocked: locked
-      };
-    })
-  });
 
   const handleUpdateApprovedRcCenters = () => {
     if (!rcForm.id) return;

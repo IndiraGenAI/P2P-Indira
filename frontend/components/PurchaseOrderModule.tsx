@@ -44,7 +44,12 @@ interface PurchaseOrderModuleProps {
   setBudgets: React.Dispatch<React.SetStateAction<Budget[]>>;
   workflowV2Rules?: WorkflowV2Rule[];
   /** One-shot navigation from Dashboard (view + list filter); consumed after apply. */
-  moduleEntryIntent?: { key: number; viewMode: ViewMode; listStatusQuick: ListStatusQuick } | null;
+  moduleEntryIntent?: {
+    key: number;
+    viewMode: ViewMode;
+    listStatusQuick: ListStatusQuick;
+    openDocumentId?: string;
+  } | null;
   onModuleEntryIntentConsumed?: () => void;
 }
 
@@ -198,8 +203,18 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
   useEffect(() => {
     if (!moduleEntryIntent) return;
     setViewMode(moduleEntryIntent.viewMode);
-    setListStatusQuick(moduleEntryIntent.listStatusQuick);
-    onModuleEntryIntentConsumed?.();
+    const tid = window.setTimeout(() => {
+      setListStatusQuick(
+        moduleEntryIntent.openDocumentId
+          ? moduleEntryIntent.listStatusQuick ?? 'approved'
+          : moduleEntryIntent.listStatusQuick
+      );
+      if (moduleEntryIntent.openDocumentId && moduleEntryIntent.viewMode === 'PO') {
+        setColPoId(moduleEntryIntent.openDocumentId);
+      }
+      onModuleEntryIntentConsumed?.();
+    }, 0);
+    return () => clearTimeout(tid);
   }, [moduleEntryIntent?.key]);
 
   // Form states

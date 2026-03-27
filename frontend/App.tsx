@@ -77,12 +77,24 @@ const App: React.FC = () => {
   const [rateContractNavIntent, setRateContractNavIntent] = useState<{
     key: number;
     viewMode: 'RC' | 'GRN' | 'Invoice';
-    listStatusQuick: 'pending';
+    listStatusQuick: 'all' | 'approved' | 'pending' | 'rejected';
+    openDocumentId?: string;
   } | null>(null);
   const [purchaseOrderNavIntent, setPurchaseOrderNavIntent] = useState<{
     key: number;
     viewMode: 'PO' | 'GRN' | 'Invoice';
-    listStatusQuick: 'pending';
+    listStatusQuick: 'all' | 'approved' | 'pending' | 'rejected';
+    openDocumentId?: string;
+  } | null>(null);
+  const [prNavIntent, setPrNavIntent] = useState<{
+    key: number;
+    listStatusQuick: 'all' | 'approved' | 'pending' | 'rejected';
+    openDocumentId?: string;
+  } | null>(null);
+  const [diNavIntent, setDiNavIntent] = useState<{
+    key: number;
+    listStatusQuick: 'all' | 'approved' | 'pending' | 'rejected';
+    openDocumentId?: string;
   } | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [masters, setMasters] = useState<Record<MasterType, MasterRecord[]>>({});
@@ -354,28 +366,74 @@ const App: React.FC = () => {
   const handleSidebarTabChange = (tab: NavigationTab) => {
     setRateContractNavIntent(null);
     setPurchaseOrderNavIntent(null);
+    setPrNavIntent(null);
+    setDiNavIntent(null);
     setActiveTab(tab);
   };
 
   const handleDashboardNavigate = (nav: DashboardNavigatePayload) => {
     if (nav.tab === 'rate_contract') {
       setPurchaseOrderNavIntent(null);
+      setPrNavIntent(null);
+      setDiNavIntent(null);
       setRateContractNavIntent(
-        nav.viewMode ? { key: Date.now(), viewMode: nav.viewMode, listStatusQuick: 'pending' } : null
+        nav.viewMode
+          ? {
+              key: Date.now(),
+              viewMode: nav.viewMode,
+              listStatusQuick: nav.openDocumentId ? 'approved' : 'pending',
+              openDocumentId: nav.openDocumentId,
+            }
+          : null
       );
       setActiveTab('rate_contract');
       return;
     }
     if (nav.tab === 'purchase_order') {
       setRateContractNavIntent(null);
+      setPrNavIntent(null);
+      setDiNavIntent(null);
       setPurchaseOrderNavIntent(
-        nav.viewMode ? { key: Date.now(), viewMode: nav.viewMode, listStatusQuick: 'pending' } : null
+        nav.viewMode
+          ? {
+              key: Date.now(),
+              viewMode: nav.viewMode,
+              listStatusQuick: nav.openDocumentId ? 'approved' : 'pending',
+              openDocumentId: nav.openDocumentId,
+            }
+          : null
       );
       setActiveTab('purchase_order');
       return;
     }
+    if (nav.tab === 'purchase_request') {
+      setRateContractNavIntent(null);
+      setPurchaseOrderNavIntent(null);
+      setDiNavIntent(null);
+      setPrNavIntent(
+        nav.focusDocumentId
+          ? { key: Date.now(), listStatusQuick: 'approved', openDocumentId: nav.focusDocumentId }
+          : null
+      );
+      setActiveTab('purchase_request');
+      return;
+    }
+    if (nav.tab === 'direct_invoice') {
+      setRateContractNavIntent(null);
+      setPurchaseOrderNavIntent(null);
+      setPrNavIntent(null);
+      setDiNavIntent(
+        nav.focusDocumentId
+          ? { key: Date.now(), listStatusQuick: 'approved', openDocumentId: nav.focusDocumentId }
+          : null
+      );
+      setActiveTab('direct_invoice');
+      return;
+    }
     setRateContractNavIntent(null);
     setPurchaseOrderNavIntent(null);
+    setPrNavIntent(null);
+    setDiNavIntent(null);
     setActiveTab(nav.tab);
   };
 
@@ -411,6 +469,8 @@ const App: React.FC = () => {
             onCreatePO={(pr) => {
               setRateContractNavIntent(null);
               setPurchaseOrderNavIntent(null);
+              setPrNavIntent(null);
+              setDiNavIntent(null);
               setActiveTab('purchase_order');
               setPendingPOFromPR(pr);
             }}
@@ -418,6 +478,8 @@ const App: React.FC = () => {
             workflows={workflows}
             budgets={budgets}
             workflowV2Rules={workflowV2Rules}
+            moduleEntryIntent={prNavIntent}
+            onModuleEntryIntentConsumed={() => setPrNavIntent(null)}
           />
         );
       case 'rate_contract':
@@ -472,6 +534,8 @@ const App: React.FC = () => {
             directInvoices={directInvoices}
             setDirectInvoices={setDirectInvoices}
             workflowV2Rules={workflowV2Rules}
+            moduleEntryIntent={diNavIntent}
+            onModuleEntryIntentConsumed={() => setDiNavIntent(null)}
           />
         );
       case 'budgets':
