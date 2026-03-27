@@ -114,12 +114,32 @@ const RELEVANT_MODULES = [
   ModuleType.DIRECT_INVOICE
 ];
 
+const WORKFLOW_FILTERS_KEY = 'workflow_config_filters_v1';
+
 const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ workflows, setWorkflows, users, masters }) => {
-  const [selectedEntity, setSelectedEntity] = useState<string>(masters['Entity']?.[0]?.name || '');
-  const [selectedModuleType, setSelectedModuleType] = useState<ModuleType>(RELEVANT_MODULES[0]);
   const allSubdeptNames = (getAllSubdepartments(masters as Record<string, MasterRecord[]>)).map((s) => s.name);
-  const [selectedSubDept, setSelectedSubDept] = useState<string>(allSubdeptNames[0] || '');
-  const [selectedCenter, setSelectedCenter] = useState<string>('All Centers');
+  const persisted = (() => {
+    try {
+      const raw = sessionStorage.getItem(WORKFLOW_FILTERS_KEY);
+      if (!raw) return null;
+      return JSON.parse(raw) as {
+        selectedEntity?: string;
+        selectedModuleType?: ModuleType;
+        selectedSubDept?: string;
+        selectedCenter?: string;
+      };
+    } catch {
+      return null;
+    }
+  })();
+  const [selectedEntity, setSelectedEntity] = useState<string>(persisted?.selectedEntity || masters['Entity']?.[0]?.name || '');
+  const [selectedModuleType, setSelectedModuleType] = useState<ModuleType>(
+    RELEVANT_MODULES.includes((persisted?.selectedModuleType as ModuleType) || RELEVANT_MODULES[0])
+      ? ((persisted?.selectedModuleType as ModuleType) || RELEVANT_MODULES[0])
+      : RELEVANT_MODULES[0]
+  );
+  const [selectedSubDept, setSelectedSubDept] = useState<string>(persisted?.selectedSubDept || allSubdeptNames[0] || '');
+  const [selectedCenter, setSelectedCenter] = useState<string>(persisted?.selectedCenter || 'All Centers');
   const [isImportOpen, setIsImportOpen] = useState(false);
 
   useEffect(() => {
@@ -128,6 +148,36 @@ const WorkflowConfiguration: React.FC<WorkflowConfigurationProps> = ({ workflows
       setSelectedSubDept(names[0]);
     }
   }, [masters, selectedSubDept]);
+
+  useEffect(() => {
+    const entityNames = (masters['Entity'] || []).map((e) => e.name);
+    if (entityNames.length > 0 && (!selectedEntity || !entityNames.includes(selectedEntity))) {
+      setSelectedEntity(entityNames[0]);
+    }
+    if (!RELEVANT_MODULES.includes(selectedModuleType)) {
+      setSelectedModuleType(RELEVANT_MODULES[0]);
+    }
+    const centers = (masters['Center'] || []).map((c) => c.name);
+    if (selectedCenter !== 'All Centers' && !centers.includes(selectedCenter)) {
+      setSelectedCenter('All Centers');
+    }
+  }, [masters, selectedEntity, selectedModuleType, selectedCenter]);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        WORKFLOW_FILTERS_KEY,
+        JSON.stringify({
+          selectedEntity,
+          selectedModuleType,
+          selectedSubDept,
+          selectedCenter,
+        })
+      );
+    } catch {
+      // ignore storage errors
+    }
+  }, [selectedEntity, selectedModuleType, selectedSubDept, selectedCenter]);
 
   const activeWorkflows = workflows
     .filter(w => 

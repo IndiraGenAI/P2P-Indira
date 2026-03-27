@@ -90,6 +90,8 @@ export interface Budget {
   controlType: BudgetControlType;
   validity: BudgetValidity;
   isActive: boolean;
+  /** Month key -> allocated amount (whole rupees). */
+  monthlyAllocation?: Record<string, number>;
   workflowStatus?: 'Draft' | 'Pending' | 'Approved' | 'Rejected';
   workflowCurrentStepIndex?: number;
   workflowRuleId?: string;

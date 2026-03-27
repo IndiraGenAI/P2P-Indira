@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Budget, BudgetAmendment, BudgetType, BudgetControlType, BudgetValidity, MasterRecord, MasterType, User, PurchaseOrder, PurchaseRequest, WorkflowV2Rule } from '../types';
 import { getDepartments, getSubdepartmentsForDepartment } from '../utils/mastersHelpers';
 import { apiPatch } from '../api';
-import { Plus, Edit2, History, CheckCircle, XCircle, ArrowRightLeft, TrendingUp, TrendingDown, AlertCircle, BarChart3, PieChart as PieChartIcon, FileText } from 'lucide-react';
+import { Plus, Edit2, History, CheckCircle, XCircle, ArrowRightLeft, TrendingUp, TrendingDown, AlertCircle, BarChart3, PieChart as PieChartIcon, FileText, ChevronDown, ChevronUp, RotateCcw } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
 interface BudgetModuleProps {
@@ -20,6 +20,55 @@ interface BudgetModuleProps {
 }
 
 const BUDGET_AUTO_SUBMIT_MS = 4000;
+const FY_MONTHS = [
+  { key: 'apr', label: 'April' },
+  { key: 'may', label: 'May' },
+  { key: 'jun', label: 'June' },
+  { key: 'jul', label: 'July' },
+  { key: 'aug', label: 'August' },
+  { key: 'sep', label: 'September' },
+  { key: 'oct', label: 'October' },
+  { key: 'nov', label: 'November' },
+  { key: 'dec', label: 'December' },
+  { key: 'jan', label: 'January' },
+  { key: 'feb', label: 'February' },
+  { key: 'mar', label: 'March' },
+] as const;
+
+const CALENDAR_MONTHS = [
+  { key: 'jan', label: 'January' },
+  { key: 'feb', label: 'February' },
+  { key: 'mar', label: 'March' },
+  { key: 'apr', label: 'April' },
+  { key: 'may', label: 'May' },
+  { key: 'jun', label: 'June' },
+  { key: 'jul', label: 'July' },
+  { key: 'aug', label: 'August' },
+  { key: 'sep', label: 'September' },
+  { key: 'oct', label: 'October' },
+  { key: 'nov', label: 'November' },
+  { key: 'dec', label: 'December' },
+] as const;
+
+type MonthDef = typeof FY_MONTHS[number];
+
+function getMonthDefs(financialYear?: string): readonly MonthDef[] {
+  const v = String(financialYear || '').trim();
+  if (/^\d{4}-\d{2}$/.test(v)) return FY_MONTHS;
+  return CALENDAR_MONTHS;
+}
+
+function distributeEqually(totalAmount: number, monthDefs: readonly MonthDef[]): Record<string, number> {
+  const safeTotal = Math.max(0, Math.round(Number(totalAmount) || 0));
+  const len = monthDefs.length || 12;
+  const perMonth = Math.floor(safeTotal / len);
+  const remainder = safeTotal - perMonth * len;
+  const out: Record<string, number> = {};
+  monthDefs.forEach((m, idx) => {
+    out[m.key] = perMonth + (idx < remainder ? 1 : 0);
+  });
+  return out;
+}
 
 const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendments, setAmendments, masters, currentUser, purchaseOrders, purchaseRequests, workflowV2Rules = [], onRefreshPendingCounts }) => {
   const budgetWorkflowExists = workflowV2Rules.some((r) => r.scope === 'Budget' && r.masterId === '__ALL__' && r.isActive);
@@ -27,6 +76,7 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
   const [budgetWorkflowSubmitting, setBudgetWorkflowSubmitting] = useState<Record<string, boolean>>({});
   const [nowTick, setNowTick] = useState(() => Date.now());
   const budgetAutoSubmitTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const addBudgetActionsRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const t = setInterval(() => setNowTick(Date.now()), 1000);
@@ -54,6 +104,12 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
     isActive: true,
     consumedAmount: 0
   });
+  const [expandedBudgetRows, setExpandedBudgetRows] = useState<Record<string, boolean>>({});
+  const [addBudgetError, setAddBudgetError] = useState<string>('');
+  const monthDefs = getMonthDefs(newBudget.financialYear);
+  const [monthlyAllocation, setMonthlyAllocation] = useState<Record<string, number>>(
+    () => distributeEqually(0, monthDefs)
+  );
 
   const [newAmendment, setNewAmendment] = useState<Partial<BudgetAmendment>>({
     type: 'Increase',
@@ -61,16 +117,75 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
     justification: ''
   });
 
+  const budgetAmountValue = Math.max(0, Math.round(Number(newBudget.amount) || 0));
+  const totalAllocated = monthDefs.reduce((sum, m) => sum + (Number(monthlyAllocation[m.key]) || 0), 0);
+  const remainingAllocation = budgetAmountValue - totalAllocated;
+  const allocationMatches = remainingAllocation === 0;
+
+  const handleBudgetAmountChange = (amount: number) => {
+    const safeAmount = Math.max(0, Math.round(Number(amount) || 0));
+    setNewBudget({ ...newBudget, amount: safeAmount });
+    setMonthlyAllocation(distributeEqually(safeAmount, monthDefs));
+    setAddBudgetError('');
+  };
+
+  const handleMonthlyAllocationChange = (monthKey: string, value: number) => {
+    const safeVal = Math.max(0, Math.round(Number(value) || 0));
+    setMonthlyAllocation((prev) => ({ ...prev, [monthKey]: safeVal }));
+    setAddBudgetError('');
+  };
+
+  const handleResetEqual = () => {
+    setMonthlyAllocation(distributeEqually(budgetAmountValue, monthDefs));
+    setAddBudgetError('');
+  };
+
+  const scrollToAddBudgetActions = () => {
+    addBudgetActionsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  };
+
+  useEffect(() => {
+    setMonthlyAllocation((prev) => {
+      const next: Record<string, number> = {};
+      monthDefs.forEach((m) => {
+        next[m.key] = Number(prev[m.key]) || 0;
+      });
+      return next;
+    });
+  }, [newBudget.financialYear]);
+
   const handleAddBudget = () => {
     if (!newBudget.coaCode || !newBudget.amount || !newBudget.costCenterName) return;
+    if (budgetAmountValue > 0) {
+      if (!allocationMatches) {
+        setAddBudgetError(
+          `Monthly allocation (₹${totalAllocated.toLocaleString()}) does not match budget amount (₹${budgetAmountValue.toLocaleString()}). Please adjust.`
+        );
+        return;
+      }
+      const hasNegative = monthDefs.some((m) => (Number(monthlyAllocation[m.key]) || 0) < 0);
+      if (hasNegative) {
+        setAddBudgetError('Monthly allocation cannot contain negative values.');
+        return;
+      }
+    }
+
+    const normalizedMonthly: Record<string, number> = {};
+    monthDefs.forEach((m) => {
+      normalizedMonthly[m.key] = Math.max(0, Math.round(Number(monthlyAllocation[m.key]) || 0));
+    });
+
     const budget: Budget = {
       ...newBudget as Budget,
       id: `B-${Math.random().toString(36).substr(2, 9).toUpperCase()}`,
       costCenterName: newBudget.costCenterName ?? '',
-      consumedAmount: 0
+      consumedAmount: 0,
+      monthlyAllocation: budgetAmountValue > 0 ? normalizedMonthly : {},
     };
     setBudgets([...budgets, budget]);
     setShowAddModal(false);
+    setAddBudgetError('');
+    setMonthlyAllocation(distributeEqually(0, monthDefs));
     if (budgetWorkflowExists) {
       setBudgetAutoSubmitUntil((prev) => ({
         ...prev,
@@ -192,8 +307,12 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
                 const consumed = Number(budget.consumedAmount) || 0;
                 const balance = amt - consumed;
                 const percentConsumed = amt > 0 ? (consumed / amt) * 100 : 0;
+                const rowMonthDefs = getMonthDefs(budget.financialYear);
+                const rowMonthly = budget.monthlyAllocation || {};
+                const rowExpanded = !!expandedBudgetRows[budget.id];
                 return (
-                  <tr key={budget.id} className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
+                  <React.Fragment key={budget.id}>
+                  <tr className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
                     <td className="p-4 font-medium text-slate-900">{budget.coaCode}</td>
                     <td className="p-4">
                       <span className={`px-2 py-1 rounded-full text-xs font-medium ${budget.budgetType === BudgetType.CAPEX ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>
@@ -276,6 +395,14 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
                       </td>
                     )}
                     <td className="p-4 text-right">
+                      <button
+                        type="button"
+                        onClick={() => setExpandedBudgetRows((prev) => ({ ...prev, [budget.id]: !prev[budget.id] }))}
+                        className="p-2 text-slate-400 hover:text-indigo-600 transition-colors"
+                        title={rowExpanded ? 'Hide monthly allocation' : 'View monthly allocation'}
+                      >
+                        {rowExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+                      </button>
                       <button 
                         onClick={() => { setSelectedBudget(budget); setShowAmendModal(true); }}
                         className="p-2 text-slate-400 hover:text-indigo-600 transition-colors"
@@ -285,6 +412,31 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
                       </button>
                     </td>
                   </tr>
+                  {rowExpanded && (
+                    <tr className="bg-slate-50/60 border-b border-slate-100">
+                      <td colSpan={budgetWorkflowExists ? 11 : 10} className="px-4 py-4">
+                        <div className="rounded-xl border border-slate-200 bg-white p-4">
+                          <div className="mb-3 flex items-center justify-between gap-3">
+                            <p className="text-sm font-semibold text-slate-700">Monthly Allocation</p>
+                            <span className="text-xs font-medium text-slate-500">
+                              FY {budget.financialYear} • Total ₹{amt.toLocaleString()}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                            {rowMonthDefs.map((m) => (
+                              <div key={m.key} className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-2">
+                                <p className="text-[11px] font-medium text-slate-500">{m.label}</p>
+                                <p className="mt-1 text-sm font-semibold text-slate-800">
+                                  ₹{(Number(rowMonthly[m.key]) || 0).toLocaleString()}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
                 );
               })}
             </tbody>
@@ -526,12 +678,12 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
       {/* Add Budget Modal */}
       {showAddModal && (
         <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-hidden">
             <div className="p-6 border-b border-slate-100 flex justify-between items-center">
               <h2 className="text-xl font-bold text-slate-900">Create New Budget</h2>
               <button onClick={() => setShowAddModal(false)} className="text-slate-400 hover:text-slate-600"><XCircle size={24} /></button>
             </div>
-            <div className="p-6 space-y-4">
+            <div className="p-6 space-y-4 overflow-y-auto max-h-[calc(90vh-140px)]">
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Financial Year</label>
@@ -647,8 +799,9 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
                     type="number"
                     className="w-full p-2 border border-slate-200 rounded-lg"
                     placeholder="Enter amount"
-                    value={newBudget.amount}
-                    onChange={e => setNewBudget({...newBudget, amount: Number(e.target.value)})}
+                    value={newBudget.amount ?? ''}
+                    min={0}
+                    onChange={e => handleBudgetAmountChange(Number(e.target.value))}
                   />
                 </div>
                 <div>
@@ -663,10 +816,67 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
                   </select>
                 </div>
               </div>
+              {budgetAmountValue > 0 && (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <h4 className="text-sm font-semibold uppercase tracking-wide text-slate-700">Monthly Allocation</h4>
+                    <button
+                      type="button"
+                      onClick={handleResetEqual}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-100"
+                    >
+                      <RotateCcw size={12} />
+                      Distribute Equally
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {monthDefs.map((month) => (
+                      <div key={month.key} className="rounded-lg border border-slate-200 bg-white p-2">
+                        <p className="mb-1 text-[11px] font-medium text-slate-500">{month.label}</p>
+                        <input
+                          type="number"
+                          min={0}
+                          className="w-full min-w-[90px] rounded-md border border-slate-200 p-1.5 text-right text-sm tabular-nums"
+                          value={monthlyAllocation[month.key] ?? 0}
+                          onChange={(e) => handleMonthlyAllocationChange(month.key, Number(e.target.value))}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
+                    <p className="font-medium text-slate-700">Total Allocated: ₹{totalAllocated.toLocaleString()}</p>
+                    {remainingAllocation < 0 && (
+                      <p className="font-semibold text-red-600">Over-allocated: ₹{remainingAllocation.toLocaleString()}</p>
+                    )}
+                    {remainingAllocation > 0 && (
+                      <p className="font-semibold text-amber-600">Remaining: ₹{remainingAllocation.toLocaleString()} (unallocated)</p>
+                    )}
+                    {remainingAllocation === 0 && <p className="font-semibold text-emerald-600">Fully allocated ✓</p>}
+                  </div>
+                </div>
+              )}
+              {!!addBudgetError && (
+                <p className="text-sm font-medium text-red-600">{addBudgetError}</p>
+              )}
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={scrollToAddBudgetActions}
+                  className="ml-auto inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-600 shadow-sm hover:bg-slate-100"
+                >
+                  ↓ Scroll to actions
+                </button>
+              </div>
             </div>
-            <div className="p-6 bg-slate-50 border-t border-slate-100 flex justify-end gap-3">
+            <div ref={addBudgetActionsRef} className="p-6 bg-slate-50 border-t border-slate-100 flex justify-end gap-3">
               <button onClick={() => setShowAddModal(false)} className="px-4 py-2 text-slate-600 font-medium">Cancel</button>
-              <button onClick={handleAddBudget} className="px-6 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700">Create Budget</button>
+              <button
+                onClick={handleAddBudget}
+                disabled={!newBudget.coaCode || !budgetAmountValue || !newBudget.costCenterName || !allocationMatches}
+                className="px-6 py-2 bg-indigo-600 text-white rounded-lg font-medium hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                Create Budget
+              </button>
             </div>
           </div>
         </div>

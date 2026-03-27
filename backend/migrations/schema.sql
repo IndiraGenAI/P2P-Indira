@@ -206,7 +206,8 @@ CREATE TABLE IF NOT EXISTS budgets (
   consumed_amount NUMERIC(18,2) NOT NULL DEFAULT 0,
   control_type VARCHAR(32) NOT NULL,
   validity VARCHAR(32) NOT NULL,
-  is_active BOOLEAN NOT NULL DEFAULT true
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  monthly_allocation JSONB NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS budget_amendments (

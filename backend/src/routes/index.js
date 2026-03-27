@@ -1332,7 +1332,7 @@ router.post('/direct-invoices', async (req, res) => {
 });
 
 // --- BUDGETS ---
-const BUDGET_COLS = ['id', 'financial_year', 'entity_name', 'location_name', 'cost_center_name', 'coa_code', 'department', 'sub_department', 'budget_type', 'amount', 'consumed_amount', 'control_type', 'validity', 'is_active', 'workflow_status', 'workflow_current_step_index', 'workflow_rule_id', 'workflow_created_by', 'workflow_rejection_remarks'];
+const BUDGET_COLS = ['id', 'financial_year', 'entity_name', 'location_name', 'cost_center_name', 'coa_code', 'department', 'sub_department', 'budget_type', 'amount', 'consumed_amount', 'control_type', 'validity', 'is_active', 'monthly_allocation', 'workflow_status', 'workflow_current_step_index', 'workflow_rule_id', 'workflow_created_by', 'workflow_rejection_remarks'];
 router.get('/budgets', async (req, res) => {
   try {
     const rows = await getAll('budgets');
