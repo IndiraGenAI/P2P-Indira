@@ -21,6 +21,7 @@ import MultiSelect from './MultiSelect';
 import TransactionListFilterBar, { ListStatusQuick } from './TransactionListFilterBar';
 import SearchableSelect from './SearchableSelect';
 import DocumentAuditLogModal from './DocumentAuditLogModal';
+import { apiDownloadFile } from '../api';
 
 type ViewMode = 'RC' | 'GRN' | 'Invoice';
 
@@ -141,6 +142,7 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
   const [colInvStatus, setColInvStatus] = useState('');
   const [showAuditModal, setShowAuditModal] = useState(false);
   const [selectedAuditDoc, setSelectedAuditDoc] = useState<RateContract | GRN | Invoice | null>(null);
+  const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
 
   const addAuditEntry = <T extends RateContract | GRN | Invoice>(doc: T, action: string): T => ({
     ...(doc as any),
@@ -162,6 +164,29 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
       };
     }),
   });
+
+  const downloadPdf = async (docType: 'rc' | 'grn' | 'invoice', id: string) => {
+    const path =
+      docType === 'rc'
+        ? `rate-contracts/${id}/download`
+        : docType === 'grn'
+          ? `grns/${id}/download`
+          : `invoices/${id}/download`;
+    const fallbackName =
+      docType === 'rc'
+        ? `rate-contract-${id}.pdf`
+        : docType === 'grn'
+          ? `grn-${id}.pdf`
+          : `invoice-${id}.pdf`;
+    try {
+      setDownloadingDocId(id);
+      await apiDownloadFile(path, fallbackName);
+    } catch (e: any) {
+      alert(e?.message || 'Failed to download PDF.');
+    } finally {
+      setDownloadingDocId(null);
+    }
+  };
 
   useEffect(() => {
     setListStatusQuick('pending');
@@ -1036,13 +1061,27 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
       {showForm ? (
         <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100 animate-in fade-in slide-in-from-bottom-4 duration-300">
           <div className="flex justify-between items-center mb-6">
-            <h3 className="text-lg font-black text-slate-900">
-              {rcForm.id ? 'Rate Contract Details' : 
-               grnForm.id ? 'GRN Details' : 
-               invoiceForm.id ? 'Invoice Details' : 
-               selectedRC ? (selectedGRN ? 'New Invoice' : 'New GRN') : 
-               'New Rate Contract'}
-            </h3>
+            <div className="flex items-center gap-3">
+              <h3 className="text-lg font-black text-slate-900">
+                {rcForm.id ? 'Rate Contract Details' :
+                 grnForm.id ? 'GRN Details' :
+                 invoiceForm.id ? 'Invoice Details' :
+                 selectedRC ? (selectedGRN ? 'New Invoice' : 'New GRN') :
+                 'New Rate Contract'}
+              </h3>
+              {(rcForm.id || grnForm.id || invoiceForm.id) && (
+                <button
+                  onClick={() => {
+                    if (rcForm.id) return downloadPdf('rc', rcForm.id);
+                    if (grnForm.id) return downloadPdf('grn', grnForm.id);
+                    if (invoiceForm.id) return downloadPdf('invoice', invoiceForm.id);
+                  }}
+                  className="text-xs font-black text-indigo-600 hover:underline"
+                >
+                  {downloadingDocId === (rcForm.id || grnForm.id || invoiceForm.id) ? 'Downloading...' : 'Download PDF'}
+                </button>
+              )}
+            </div>
             <button onClick={() => { setShowForm(false); resetForms(); setUpdateSuccessMessage(false); }} className="text-slate-400 hover:text-slate-600">
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
             </button>

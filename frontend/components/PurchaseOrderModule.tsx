@@ -21,7 +21,7 @@ import {
 import TransactionListFilterBar, { ListStatusQuick } from './TransactionListFilterBar';
 import SearchableSelect from './SearchableSelect';
 import { AlertCircle, Info, ShieldCheck, ShieldAlert } from 'lucide-react';
-import { apiGet } from '../api';
+import { apiDownloadFile, apiGet } from '../api';
 import DocumentAuditLogModal from './DocumentAuditLogModal';
 
 const PO_LINE_GST_USE_HEADER = '__HEADER__' as const;
@@ -100,6 +100,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
   const [poRemainingError, setPoRemainingError] = useState<string | null>(null);
   const [showAuditModal, setShowAuditModal] = useState(false);
   const [selectedAuditDoc, setSelectedAuditDoc] = useState<PurchaseOrder | GRN | Invoice | null>(null);
+  const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
 
   const [listStatusQuick, setListStatusQuick] = useState<ListStatusQuick>('pending');
   const [listDateFrom, setListDateFrom] = useState('');
@@ -123,6 +124,29 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       { action, userId: currentUser.id, at: new Date().toISOString(), stepIndex: doc.currentStepIndex }
     ]
   } as T);
+
+  const downloadPdf = async (docType: 'po' | 'grn' | 'invoice', id: string) => {
+    const path =
+      docType === 'po'
+        ? `purchase-orders/${id}/download`
+        : docType === 'grn'
+          ? `grns/${id}/download`
+          : `invoices/${id}/download`;
+    const fallbackName =
+      docType === 'po'
+        ? `purchase-order-${id}.pdf`
+        : docType === 'grn'
+          ? `grn-${id}.pdf`
+          : `invoice-${id}.pdf`;
+    try {
+      setDownloadingDocId(id);
+      await apiDownloadFile(path, fallbackName);
+    } catch (e: any) {
+      alert(e?.message || 'Failed to download PDF.');
+    } finally {
+      setDownloadingDocId(null);
+    }
+  };
 
   const toDate = (value?: string) => {
     if (!value) return null;
@@ -1404,9 +1428,26 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       {showForm ? (
         <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100 animate-in fade-in slide-in-from-bottom-4 duration-300">
           <div className="flex justify-between items-center mb-6">
-            <h3 className="text-lg font-black text-slate-900">
-              {selectedPO ? (selectedGRN ? 'Create Invoice' : 'Create GRN') : 'New Purchase Order'}
-            </h3>
+            <div className="flex items-center gap-3">
+              <h3 className="text-lg font-black text-slate-900">
+                {poForm.id ? 'Purchase Order Details' :
+                 grnForm.id ? 'GRN Details' :
+                 invoiceForm.id ? 'Invoice Details' :
+                 selectedPO ? (selectedGRN ? 'Create Invoice' : 'Create GRN') : 'New Purchase Order'}
+              </h3>
+              {(poForm.id || grnForm.id || invoiceForm.id) && (
+                <button
+                  onClick={() => {
+                    if (poForm.id) return downloadPdf('po', poForm.id);
+                    if (grnForm.id) return downloadPdf('grn', grnForm.id);
+                    if (invoiceForm.id) return downloadPdf('invoice', invoiceForm.id);
+                  }}
+                  className="text-xs font-black text-indigo-600 hover:underline"
+                >
+                  {downloadingDocId === (poForm.id || grnForm.id || invoiceForm.id) ? 'Downloading...' : 'Download PDF'}
+                </button>
+              )}
+            </div>
             <button onClick={() => { setShowForm(false); resetForms(); }} className="text-slate-400 hover:text-slate-600">
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
@@ -1812,7 +1853,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                       <div className="space-y-1">
                         <label className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">Net Total Amount</label>
                         <div className="text-lg font-black text-indigo-700">
-                          ₹{poForm.amount?.toFixed(2)}
+                          ₹{Number(poForm.amount || 0).toFixed(2)}
                         </div>
                       </div>
                     </div>
@@ -2456,6 +2497,20 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                   <td className="px-6 py-4">
                     <div className="flex flex-col space-y-2">
                       <div className="flex space-x-2">
+                        <button
+                          onClick={() => {
+                            setPoForm({
+                              ...po,
+                              amount: Number(po.amount) || 0,
+                            });
+                            setSelectedPO(null);
+                            setSelectedGRN(null);
+                            setShowForm(true);
+                          }}
+                          className="text-xs font-black text-slate-600 hover:underline"
+                        >
+                          View
+                        </button>
                         {canCompleteReview(po) && (
                           <button onClick={() => completeReviewPO(po.id)} className="text-xs font-black text-amber-600 hover:underline">Complete Review</button>
                         )}
@@ -2558,6 +2613,17 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex space-x-2">
+                        <button
+                          onClick={() => {
+                            setGrnForm(grn);
+                            setSelectedPO(po || purchaseOrders.find((p) => p.id === grn.purchaseOrderId) || null);
+                            setSelectedGRN(null);
+                            setShowForm(true);
+                          }}
+                          className="text-xs font-black text-slate-600 hover:underline"
+                        >
+                          View
+                        </button>
                         {canCompleteReview(grn) && (
                           <button onClick={() => completeReviewGRN(grn.id)} className="text-xs font-black text-amber-600 hover:underline">Complete Review</button>
                         )}
@@ -2633,6 +2699,18 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex space-x-2">
+                      <button
+                        onClick={() => {
+                          setInvoiceForm(inv);
+                          const grn = grns.find((g) => g.id === inv.grnId);
+                          setSelectedGRN(grn || null);
+                          setSelectedPO((grn && purchaseOrders.find((p) => p.id === grn.purchaseOrderId)) || null);
+                          setShowForm(true);
+                        }}
+                        className="text-xs font-black text-slate-600 hover:underline"
+                      >
+                        View
+                      </button>
                       {canCompleteReview(inv) && (
                         <button onClick={() => completeReviewInvoice(inv.id)} className="text-xs font-black text-amber-600 hover:underline">Complete Review</button>
                       )}

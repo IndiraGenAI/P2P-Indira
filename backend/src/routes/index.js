@@ -2,6 +2,7 @@ import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 import pool, { query, rowsToCamel, rowToCamel, objToSnake } from '../db.js';
 import * as sessionTracker from '../sessionTracker.js';
+import { generateDocumentPdf, pdfUtils } from '../services/pdfService.js';
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'p2p-indira-jwt-secret-change-in-production';
@@ -121,6 +122,52 @@ function lineKey(item, index) {
   const center = String(item?.centerName || '').trim().toLowerCase();
   const rate = normalizeNumber(item?.rate);
   return `fallback:${itemName}|${center}|${rate}|${index}`;
+}
+
+const PDF_COMPANY = {
+  name: process.env.PDF_COMPANY_NAME || 'P2P Admin Elite',
+  address1: process.env.PDF_COMPANY_ADDR1 || 'Procurement Operations',
+  address2: process.env.PDF_COMPANY_ADDR2 || 'India',
+  gst: process.env.PDF_COMPANY_GST || '—',
+  pan: process.env.PDF_COMPANY_PAN || '—',
+};
+
+async function getMasterMaps() {
+  const m = await query("SELECT master_type, id, name, data FROM masters WHERE master_type IN ('Vendor','Vendor Site')");
+  const vendorById = {};
+  const vendorSiteById = {};
+  for (const row of m.rows) {
+    if (row.master_type === 'Vendor') vendorById[row.id] = row.name;
+    if (row.master_type === 'Vendor Site') {
+      const data = typeof row.data === 'string' ? (() => { try { return JSON.parse(row.data || '{}'); } catch { return {}; } })() : (row.data || {});
+      vendorSiteById[row.id] = { name: row.name, vendorId: data.vendorId || null };
+    }
+  }
+  return { vendorById, vendorSiteById };
+}
+
+async function getDocByTable(table, id) {
+  const res = await query(`SELECT * FROM ${table} WHERE id = $1`, [id]);
+  if (!res.rows[0]) return null;
+  const row = rowToCamel(res.rows[0]);
+  const jsonCols = JSON_COLUMNS[table] || [];
+  for (const col of jsonCols) {
+    if (typeof row[col] === 'string') {
+      try { row[col] = JSON.parse(row[col]); } catch {}
+    }
+  }
+  return row;
+}
+
+function commonSummaryFromItems(items, totalAmount) {
+  const base = (items || []).reduce((s, it) => s + normalizeNumber(it.amount ?? (normalizeNumber(it.quantity) * normalizeNumber(it.rate))), 0);
+  const total = normalizeNumber(totalAmount) || base;
+  const gst = Math.max(0, total - base);
+  return [
+    { label: 'Subtotal:', value: pdfUtils.formatCurrency(base) },
+    { label: 'GST:', value: pdfUtils.formatCurrency(gst) },
+    { label: 'TOTAL:', value: pdfUtils.formatCurrency(total) },
+  ];
 }
 
 async function getPoRemainingQuantities(poId) {
@@ -1330,6 +1377,182 @@ router.post('/direct-invoices', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
+function sendPdfResponse(res, filename, buffer) {
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(buffer);
+}
+
+async function buildPdfPayload(docType, row, masterMaps) {
+  const { vendorById, vendorSiteById } = masterMaps;
+  const items = Array.isArray(row.items) ? row.items : [];
+  const vendorSite = row.vendorSiteId ? vendorSiteById[row.vendorSiteId] : null;
+  const vendorName = row.vendorId ? vendorById[row.vendorId] : (vendorSite?.vendorId ? vendorById[vendorSite.vendorId] : '—');
+  const common = {
+    company: PDF_COMPANY,
+    docNo: row.id,
+    status: row.status,
+    date: row.createdAt || row.invoiceDate || row.validFrom,
+    leftDetails: [
+      `Vendor: ${vendorName || '—'}`,
+      `Vendor Site: ${vendorSite?.name || '—'}`,
+      `Department: ${row.department || '—'}`,
+      `Sub-Department: ${row.subDepartment || '—'}`,
+    ],
+    docDetails: [
+      `Entity: ${row.entityName || '—'}`,
+      `Remarks: ${row.remarks || '—'}`,
+      `Summary: ${row.overallSummary || '—'}`,
+    ],
+    preparedBy: row.createdBy || 'System',
+    approvedBy: 'Workflow',
+  };
+
+  if (docType === 'purchase-request') {
+    return {
+      ...common,
+      title: 'Purchase Request',
+      rightDetails: [
+        `Valid From: ${pdfUtils.formatDate(row.validFrom)}`,
+        `Valid To: ${pdfUtils.formatDate(row.validTo)}`,
+        `Required Date: ${pdfUtils.formatDate(row.requiredDate)}`,
+        `Frequency: ${row.frequency || '—'}`,
+      ],
+      columns: [
+        { key: 'itemName', header: 'Item' },
+        { key: 'quantity', header: 'Qty', align: 'right' },
+        { key: 'rate', header: 'Rate', align: 'right' },
+        { key: 'amount', header: 'Amount', align: 'right' },
+      ],
+      items: items.map((it) => ({ itemName: it.itemName || '—', quantity: normalizeNumber(it.quantity), rate: normalizeNumber(it.rate), amount: normalizeNumber(it.amount) })),
+      summary: commonSummaryFromItems(items, row.amount),
+    };
+  }
+
+  if (docType === 'rate-contract') {
+    return {
+      ...common,
+      title: 'Rate Contract',
+      rightDetails: [
+        `Valid From: ${pdfUtils.formatDate(row.validFrom)}`,
+        `Valid To: ${pdfUtils.formatDate(row.validTo)}`,
+        `Required Date: ${pdfUtils.formatDate(row.requiredDate)}`,
+        `Frequency: ${row.frequency || '—'}`,
+      ],
+      columns: [
+        { key: 'itemName', header: 'Item' },
+        { key: 'centerName', header: 'Center' },
+        { key: 'rate', header: 'Rate', align: 'right' },
+        { key: 'amount', header: 'Amount', align: 'right' },
+      ],
+      items: items.map((it) => ({ itemName: it.itemName || '—', centerName: it.centerName || '—', rate: normalizeNumber(it.rate), amount: normalizeNumber(it.amount) })),
+      summary: commonSummaryFromItems(items, row.amount),
+    };
+  }
+
+  if (docType === 'purchase-order') {
+    return {
+      ...common,
+      title: 'Purchase Order',
+      rightDetails: [
+        `Valid From: ${pdfUtils.formatDate(row.validFrom)}`,
+        `Valid To: ${pdfUtils.formatDate(row.validTo)}`,
+        `Required Date: ${pdfUtils.formatDate(row.requiredDate)}`,
+        `Frequency: ${row.frequency || '—'}`,
+      ],
+      columns: [
+        { key: 'itemName', header: 'Item' },
+        { key: 'quantity', header: 'Qty', align: 'right' },
+        { key: 'rate', header: 'Rate', align: 'right' },
+        { key: 'amount', header: 'Amount', align: 'right' },
+      ],
+      items: items.map((it) => ({ itemName: it.itemName || '—', quantity: normalizeNumber(it.quantity), rate: normalizeNumber(it.rate), amount: normalizeNumber(it.amount) })),
+      summary: commonSummaryFromItems(items, row.amount),
+    };
+  }
+
+  if (docType === 'grn') {
+    return {
+      ...common,
+      title: 'Goods Receipt Note',
+      rightDetails: [
+        `Invoice Number: ${row.invoiceNumber || '—'}`,
+        `Invoice Date: ${pdfUtils.formatDate(row.invoiceDate)}`,
+        `PO/RC Ref: ${row.purchaseOrderId || row.rateContractId || '—'}`,
+        `Location: ${row.location || '—'}`,
+      ],
+      columns: [
+        { key: 'itemName', header: 'Item' },
+        { key: 'quantity', header: 'Received Qty', align: 'right' },
+        { key: 'rate', header: 'Rate', align: 'right' },
+        { key: 'amount', header: 'Amount', align: 'right' },
+      ],
+      items: items.map((it) => ({ itemName: it.itemName || '—', quantity: normalizeNumber(it.quantity), rate: normalizeNumber(it.rate), amount: normalizeNumber(it.amount) })),
+      summary: commonSummaryFromItems(items, row.amount),
+    };
+  }
+
+  if (docType === 'invoice') {
+    return {
+      ...common,
+      title: 'Invoice',
+      rightDetails: [
+        `Invoice Number: ${row.invoiceNumber || '—'}`,
+        `Invoice Date: ${pdfUtils.formatDate(row.invoiceDate)}`,
+        `GRN Ref: ${row.grnId || '—'}`,
+        `Location: ${row.location || '—'}`,
+      ],
+      columns: [
+        { key: 'itemName', header: 'Item' },
+        { key: 'quantity', header: 'Qty', align: 'right' },
+        { key: 'rate', header: 'Rate', align: 'right' },
+        { key: 'amount', header: 'Amount', align: 'right' },
+      ],
+      items: items.map((it) => ({ itemName: it.itemName || '—', quantity: normalizeNumber(it.quantity), rate: normalizeNumber(it.rate), amount: normalizeNumber(it.amount) })),
+      summary: commonSummaryFromItems(items, row.amount),
+    };
+  }
+
+  return {
+    ...common,
+    title: 'Direct Invoice',
+    rightDetails: [
+      `Invoice Number: ${row.invoiceNumber || '—'}`,
+      `Invoice Date: ${pdfUtils.formatDate(row.invoiceDate)}`,
+      `Location: ${row.location || '—'}`,
+      `Transaction Type: ${row.transactionType || '—'}`,
+    ],
+    columns: [
+      { key: 'itemName', header: 'Item' },
+      { key: 'quantity', header: 'Qty', align: 'right' },
+      { key: 'rate', header: 'Rate', align: 'right' },
+      { key: 'amount', header: 'Amount', align: 'right' },
+    ],
+    items: items.map((it) => ({ itemName: it.itemName || '—', quantity: normalizeNumber(it.quantity), rate: normalizeNumber(it.rate), amount: normalizeNumber(it.amount) })),
+    summary: commonSummaryFromItems(items, row.amount),
+  };
+}
+
+async function handleDownload(req, res, table, docType, filenamePrefix) {
+  try {
+    const row = await getDocByTable(table, req.params.id);
+    if (!row) return res.status(404).json({ error: 'Document not found' });
+    const maps = await getMasterMaps();
+    const payload = await buildPdfPayload(docType, row, maps);
+    const buffer = await generateDocumentPdf(payload);
+    sendPdfResponse(res, `${filenamePrefix}-${row.id}.pdf`, buffer);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+}
+
+router.get('/purchase-requests/:id/download', async (req, res) => handleDownload(req, res, 'purchase_requests', 'purchase-request', 'purchase-request'));
+router.get('/rate-contracts/:id/download', async (req, res) => handleDownload(req, res, 'rate_contracts', 'rate-contract', 'rate-contract'));
+router.get('/purchase-orders/:id/download', async (req, res) => handleDownload(req, res, 'purchase_orders', 'purchase-order', 'purchase-order'));
+router.get('/grns/:id/download', async (req, res) => handleDownload(req, res, 'grns', 'grn', 'grn'));
+router.get('/invoices/:id/download', async (req, res) => handleDownload(req, res, 'invoices', 'invoice', 'invoice'));
+router.get('/direct-invoices/:id/download', async (req, res) => handleDownload(req, res, 'direct_invoices', 'direct-invoice', 'direct-invoice'));
 
 // --- BUDGETS ---
 const BUDGET_COLS = ['id', 'financial_year', 'entity_name', 'location_name', 'cost_center_name', 'coa_code', 'department', 'sub_department', 'budget_type', 'amount', 'consumed_amount', 'control_type', 'validity', 'is_active', 'monthly_allocation', 'workflow_status', 'workflow_current_step_index', 'workflow_rule_id', 'workflow_created_by', 'workflow_rejection_remarks'];

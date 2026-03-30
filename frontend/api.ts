@@ -101,3 +101,23 @@ export async function apiPatch<T = unknown>(path: string, body?: unknown): Promi
   }
   return res.json();
 }
+
+export async function apiDownloadFile(path: string, fallbackFileName: string): Promise<void> {
+  const res = await fetch(`${API_BASE}${path}`, { headers: getAuthHeaders() });
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    await handleErrorResponse(res, text);
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get('content-disposition') || '';
+  const match = disposition.match(/filename=\"?([^"]+)\"?/i);
+  const fileName = match?.[1] || fallbackFileName;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

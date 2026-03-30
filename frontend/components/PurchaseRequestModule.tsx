@@ -19,6 +19,7 @@ import MultiSelect from './MultiSelect';
 import TransactionListFilterBar, { ListStatusQuick } from './TransactionListFilterBar';
 import { AlertCircle, Info } from 'lucide-react';
 import DocumentAuditLogModal from './DocumentAuditLogModal';
+import { apiDownloadFile } from '../api';
 
 export type PurchaseRequestModuleEntryIntent = {
   key: number;
@@ -97,6 +98,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
   const [colPrStatus, setColPrStatus] = useState('');
   const [showAuditModal, setShowAuditModal] = useState(false);
   const [selectedAuditDoc, setSelectedAuditDoc] = useState<PurchaseRequest | null>(null);
+  const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
 
   const addAuditEntry = (doc: PurchaseRequest, action: string) => ({
     ...(doc as any),
@@ -371,6 +373,26 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
     alert('PR status reset to Pending for amendment. It will follow the approval workflow again.');
   };
 
+  const openPrView = (pr: PurchaseRequest) => {
+    setPrForm({
+      ...pr,
+      items: (pr.items || []).map((it) => ({ ...it, id: it.id || Math.random().toString() })),
+      attachments: pr.attachments || [],
+    });
+    setShowForm(true);
+  };
+
+  const downloadPrPdf = async (id: string) => {
+    try {
+      setDownloadingDocId(id);
+      await apiDownloadFile(`purchase-requests/${id}/download`, `purchase-request-${id}.pdf`);
+    } catch (e: any) {
+      alert(e?.message || 'Failed to download PDF.');
+    } finally {
+      setDownloadingDocId(null);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap justify-between items-center gap-3">
@@ -404,7 +426,17 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
       {showForm ? (
         <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100 animate-in fade-in slide-in-from-bottom-4 duration-300">
           <div className="flex justify-between items-center mb-6">
-            <h3 className="text-lg font-black text-slate-900">New Purchase Request</h3>
+            <div className="flex items-center gap-3">
+              <h3 className="text-lg font-black text-slate-900">{prForm.id ? 'Purchase Request Details' : 'New Purchase Request'}</h3>
+              {prForm.id && (
+                <button
+                  onClick={() => downloadPrPdf(prForm.id!)}
+                  className="text-xs font-black text-indigo-600 hover:underline"
+                >
+                  {downloadingDocId === prForm.id ? 'Downloading...' : 'Download PDF'}
+                </button>
+              )}
+            </div>
             <button onClick={() => { setShowForm(false); resetForm(); }} className="text-slate-400 hover:text-slate-600">
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
@@ -708,9 +740,10 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
             <button onClick={() => { setShowForm(false); resetForm(); }} className="px-6 py-3 rounded-xl font-black text-slate-500 hover:bg-slate-50 transition-colors">Cancel</button>
             <button 
               onClick={handleCreatePR}
+              disabled={!!prForm.id}
               className="bg-indigo-600 text-white px-8 py-3 rounded-xl font-black shadow-lg shadow-indigo-200 hover:scale-105 transition-transform"
             >
-              Submit Purchase Request
+              {prForm.id ? 'View Mode' : 'Submit Purchase Request'}
             </button>
           </div>
         </div>
@@ -876,6 +909,12 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
                       )}
                       {pr.status === 'Approved' && (
                         <div className="flex space-x-2">
+                          <button
+                            onClick={() => openPrView(pr)}
+                            className="bg-white border border-slate-300 text-slate-700 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-slate-50"
+                          >
+                            View
+                          </button>
                           <button 
                             onClick={() => onCreatePO(pr)}
                             className="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider hover:scale-105 transition-transform"

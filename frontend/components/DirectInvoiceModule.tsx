@@ -19,6 +19,7 @@ import {
 import MultiSelect from './MultiSelect';
 import TransactionListFilterBar, { ListStatusQuick } from './TransactionListFilterBar';
 import DocumentAuditLogModal from './DocumentAuditLogModal';
+import { apiDownloadFile } from '../api';
 
 export type DirectInvoiceModuleEntryIntent = {
   key: number;
@@ -67,6 +68,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
   const [colInvStatus, setColInvStatus] = useState('');
   const [showAuditModal, setShowAuditModal] = useState(false);
   const [selectedAuditDoc, setSelectedAuditDoc] = useState<Invoice | null>(null);
+  const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
 
   const addAuditEntry = (doc: Invoice, action: string) => ({
     ...(doc as any),
@@ -480,6 +482,26 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
     }));
   };
 
+  const openInvoiceView = (inv: Invoice) => {
+    setInvoiceForm({
+      ...inv,
+      items: (inv.items || []).map((it: any) => ({ ...it, id: it.id || Math.random().toString() })),
+      attachments: (inv as any).attachments || [],
+    });
+    setShowForm(true);
+  };
+
+  const downloadInvoicePdf = async (id: string) => {
+    try {
+      setDownloadingDocId(id);
+      await apiDownloadFile(`direct-invoices/${id}/download`, `direct-invoice-${id}.pdf`);
+    } catch (e: any) {
+      alert(e?.message || 'Failed to download PDF.');
+    } finally {
+      setDownloadingDocId(null);
+    }
+  };
+
   const reverseInvoice = (id: string) => {
     setDirectInvoices(directInvoices.map(inv => inv.id === id ? { ...inv, status: 'Reversed' } : inv));
     alert('Direct Invoice reversed. You can now recreate it.');
@@ -518,7 +540,17 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
       {showForm ? (
         <div className="bg-white p-8 rounded-3xl shadow-xl border border-slate-100 animate-in fade-in slide-in-from-bottom-4 duration-300">
           <div className="flex justify-between items-center mb-6">
-            <h3 className="text-lg font-black text-slate-900">New Direct Invoice</h3>
+            <div className="flex items-center gap-3">
+              <h3 className="text-lg font-black text-slate-900">{invoiceForm.id ? 'Direct Invoice Details' : 'New Direct Invoice'}</h3>
+              {invoiceForm.id && (
+                <button
+                  onClick={() => downloadInvoicePdf(invoiceForm.id)}
+                  className="text-xs font-black text-indigo-600 hover:underline"
+                >
+                  {downloadingDocId === invoiceForm.id ? 'Downloading...' : 'Download PDF'}
+                </button>
+              )}
+            </div>
             <button onClick={() => { setShowForm(false); resetForm(); }} className="text-slate-400 hover:text-slate-600">
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
@@ -869,9 +901,10 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
             <button onClick={() => { setShowForm(false); resetForm(); }} className="px-6 py-3 rounded-xl font-black text-slate-500 hover:bg-slate-50 transition-colors">Cancel</button>
             <button 
               onClick={handleCreateInvoice}
+              disabled={!!invoiceForm.id}
               className="bg-indigo-600 text-white px-8 py-3 rounded-xl font-black shadow-lg shadow-indigo-200 hover:scale-105 transition-transform"
             >
-              Submit Invoice
+              {invoiceForm.id ? 'View Mode' : 'Submit Invoice'}
             </button>
           </div>
         </div>
@@ -998,6 +1031,12 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
                     <td className="px-6 py-4">
                       <div className="flex flex-col space-y-2">
                         <div className="flex space-x-2">
+                          <button
+                            onClick={() => openInvoiceView(inv)}
+                            className="text-slate-700 text-xs font-black hover:underline"
+                          >
+                            View
+                          </button>
                           {canCompleteReview(inv) && (
                             <button 
                               onClick={() => completeReviewInvoice(inv.id)}
