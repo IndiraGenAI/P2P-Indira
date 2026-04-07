@@ -92,7 +92,8 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
     overallSummary: '',
     attachments: [],
     shippingAddressId: '',
-    billingAddressId: ''
+    billingAddressId: '',
+    currencyCode: (masters['Currency']?.[0]?.name as string | undefined) || 'INR',
   });
 
   const [grnForm, setGrnForm] = useState<Partial<GRN>>({
@@ -121,7 +122,14 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
     billingAddressId: '',
     tds: 0,
     gst: 0,
-    items: []
+    items: [],
+    invoiceCurrency: (masters['Currency']?.[0]?.name as string | undefined) || 'INR',
+    invoiceGroup: '',
+    invoiceSource:
+      (masters['Invoice Source']?.find((s) => s.name === 'P2P')?.name as string | undefined) ||
+      (masters['Invoice Source']?.[0]?.name as string | undefined) ||
+      'P2P',
+    invoiceType: 'Standard',
   });
 
   const [bulkUploadType, setBulkUploadType] = useState<'RC' | 'GRN' | 'Invoice' | null>(null);
@@ -571,6 +579,12 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
 
   const handleCreateInvoice = () => {
     if (!selectedGRN) return;
+    const rcForInv = selectedRC || rateContracts.find((r) => r.id === selectedGRN.rateContractId);
+    const defaultCur = (masters['Currency']?.[0]?.name as string | undefined) || 'INR';
+    const defaultSrc =
+      (masters['Invoice Source']?.find((s) => s.name === 'P2P')?.name as string | undefined) ||
+      (masters['Invoice Source']?.[0]?.name as string | undefined) ||
+      'P2P';
     const newInvoice: Invoice = {
       ...invoiceForm as Invoice,
       id: `INV-${Math.floor(Math.random() * 10000)}`,
@@ -583,7 +597,11 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
       createdAt: new Date().toISOString(),
       createdBy: currentUser.id,
       attachments: invoiceForm.attachments || [],
-      workflowStepHistory: [{ action: 'submit', userId: currentUser.id, at: new Date().toISOString(), stepIndex: 0 }]
+      workflowStepHistory: [{ action: 'submit', userId: currentUser.id, at: new Date().toISOString(), stepIndex: 0 }],
+      invoiceCurrency: invoiceForm.invoiceCurrency || rcForInv?.currencyCode || defaultCur,
+      invoiceGroup: invoiceForm.invoiceGroup,
+      invoiceSource: invoiceForm.invoiceSource || defaultSrc,
+      invoiceType: invoiceForm.invoiceType || 'Standard',
     };
     setInvoices([...invoices, newInvoice]);
     setShowForm(false);
@@ -597,10 +615,32 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
       frequency: 'Monthly', department: '', subDepartment: '', paymentTerms: '',
       items: [{ id: Math.random().toString(), itemName: '', desc: '', quantity: 1, rate: 0, amount: 0, centerName: '', remarks: '' }],
       amount: 0, remarks: '', overallSummary: '', attachments: [],
-      shippingAddressId: '', billingAddressId: ''
+      shippingAddressId: '', billingAddressId: '',
+      currencyCode: (masters['Currency']?.[0]?.name as string | undefined) || 'INR',
     });
     setGrnForm({ vendorSiteId: '', location: '', items: [], amount: 0, remarks: '', overallSummary: '', attachments: [], shippingAddressId: '', billingAddressId: '', tds: 0, gst: 0, invoiceNumber: '', invoiceDate: '' });
-    setInvoiceForm({ vendorSiteId: '', location: '', remarks: '', overallSummary: '', attachments: [], shippingAddressId: '', billingAddressId: '', tds: 0, gst: 0, items: [], invoiceNumber: '', invoiceDate: '' });
+    setInvoiceForm({
+      entityName: masters.Entity?.[0]?.name || '',
+      vendorSiteId: '',
+      location: '',
+      remarks: '',
+      overallSummary: '',
+      attachments: [],
+      shippingAddressId: '',
+      billingAddressId: '',
+      tds: 0,
+      gst: 0,
+      items: [],
+      invoiceNumber: '',
+      invoiceDate: '',
+      invoiceCurrency: (masters['Currency']?.[0]?.name as string | undefined) || 'INR',
+      invoiceGroup: '',
+      invoiceSource:
+        (masters['Invoice Source']?.find((s) => s.name === 'P2P')?.name as string | undefined) ||
+        (masters['Invoice Source']?.[0]?.name as string | undefined) ||
+        'P2P',
+      invoiceType: 'Standard',
+    });
     setSelectedRC(null);
     setSelectedGRN(null);
   };
@@ -818,7 +858,8 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
       );
 
       if (!rule || inv.currentStepIndex >= rule.approvalChain.length - 1) {
-        return addAuditEntry({ ...inv, status: 'Approved' }, 'approve');
+        const acc = inv.accountingDate || getTodayISTDate();
+        return addAuditEntry({ ...inv, status: 'Approved', accountingDate: acc }, 'approve');
       }
 
       return addAuditEntry({ ...inv, currentStepIndex: inv.currentStepIndex + 1 }, 'approve');
@@ -1070,6 +1111,7 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                  'New Rate Contract'}
               </h3>
               {(rcForm.id || grnForm.id || invoiceForm.id) && (
+                <>
                 <button
                   onClick={() => {
                     if (rcForm.id) return downloadPdf('rc', rcForm.id);
@@ -1080,6 +1122,7 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                 >
                   {downloadingDocId === (rcForm.id || grnForm.id || invoiceForm.id) ? 'Downloading...' : 'Download PDF'}
                 </button>
+                </>
               )}
             </div>
             <button onClick={() => { setShowForm(false); resetForms(); setUpdateSuccessMessage(false); }} className="text-slate-400 hover:text-slate-600">
@@ -1160,6 +1203,25 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                     {(masters['Entity'] || []).flatMap(ent => ent.billingAddresses || []).map((addr: any) => (
                       <option key={addr.id} value={addr.id}>{addr.address}</option>
                     ))}
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-black text-slate-500 uppercase tracking-wider">RC currency (Oracle)</label>
+                  <select
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium disabled:opacity-50"
+                    value={rcForm.currencyCode || 'INR'}
+                    onChange={(e) => setRcForm({ ...rcForm, currencyCode: e.target.value })}
+                    disabled={isRcReadOnly}
+                  >
+                    {(masters['Currency'] ?? []).length === 0 ? (
+                      <option value="INR">INR</option>
+                    ) : (
+                      (masters['Currency'] ?? []).map((c) => (
+                        <option key={c.id} value={c.name}>
+                          {c.name}
+                        </option>
+                      ))
+                    )}
                   </select>
                 </div>
                 <div className="space-y-2">
@@ -1770,6 +1832,96 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                   </select>
                 </div>
 
+                <div className="col-span-2 space-y-3 p-4 rounded-2xl border border-slate-200 bg-slate-50/80">
+                  <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider">Fusion / Oracle invoice header</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Invoice currency</label>
+                      <select
+                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
+                        value={invoiceForm.invoiceCurrency || selectedRC?.currencyCode || 'INR'}
+                        onChange={(e) => setInvoiceForm({ ...invoiceForm, invoiceCurrency: e.target.value })}
+                        disabled={isInvoiceReadOnly}
+                      >
+                        {(masters['Currency'] ?? []).length === 0 ? (
+                          <option value="INR">INR</option>
+                        ) : (
+                          (masters['Currency'] ?? []).map((c) => (
+                            <option key={c.id} value={c.name}>
+                              {c.name}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Invoice group</label>
+                      <input
+                        type="text"
+                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
+                        value={invoiceForm.invoiceGroup ?? ''}
+                        onChange={(e) => setInvoiceForm({ ...invoiceForm, invoiceGroup: e.target.value })}
+                        disabled={isInvoiceReadOnly}
+                        placeholder="Optional"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Invoice source</label>
+                      <select
+                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
+                        value={invoiceForm.invoiceSource || 'P2P'}
+                        onChange={(e) => setInvoiceForm({ ...invoiceForm, invoiceSource: e.target.value })}
+                        disabled={isInvoiceReadOnly}
+                      >
+                        {(masters['Invoice Source'] ?? []).length === 0 ? (
+                          <option value="P2P">P2P</option>
+                        ) : (
+                          (masters['Invoice Source'] ?? []).map((s) => (
+                            <option key={s.id} value={s.name}>
+                              {s.name}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Invoice type</label>
+                      <select
+                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
+                        value={invoiceForm.invoiceType || 'Standard'}
+                        onChange={(e) => setInvoiceForm({ ...invoiceForm, invoiceType: e.target.value })}
+                        disabled={isInvoiceReadOnly}
+                      >
+                        <option value="Standard">Standard</option>
+                        <option value="Prepayment">Prepayment</option>
+                        <option value="Debit memo">Debit memo</option>
+                      </select>
+                    </div>
+                    {(invoiceForm.accountingDate || invoiceForm.oracleInvoiceId || invoiceForm.oracleSyncStatus) && (
+                      <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                        {invoiceForm.accountingDate && (
+                          <div>
+                            <span className="text-slate-400 font-bold uppercase tracking-wider">Accounting date</span>
+                            <div className="font-bold text-slate-800 mt-0.5">{invoiceForm.accountingDate}</div>
+                          </div>
+                        )}
+                        {invoiceForm.oracleInvoiceId && (
+                          <div>
+                            <span className="text-slate-400 font-bold uppercase tracking-wider">Oracle invoice id</span>
+                            <div className="font-bold text-slate-800 mt-0.5">{invoiceForm.oracleInvoiceId}</div>
+                          </div>
+                        )}
+                        {invoiceForm.oracleSyncStatus && (
+                          <div>
+                            <span className="text-slate-400 font-bold uppercase tracking-wider">Oracle sync</span>
+                            <div className="font-bold text-slate-800 mt-0.5">{invoiceForm.oracleSyncStatus}</div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 <div className="col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Remarks</label>
@@ -2277,6 +2429,11 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                           <>
                             <button 
                               onClick={() => { 
+                                const defaultCur = (masters['Currency']?.[0]?.name as string | undefined) || 'INR';
+                                const defaultSrc =
+                                  (masters['Invoice Source']?.find((s) => s.name === 'P2P')?.name as string | undefined) ||
+                                  (masters['Invoice Source']?.[0]?.name as string | undefined) ||
+                                  'P2P';
                                 setSelectedRC(rc || null); 
                                 setSelectedGRN(grn);
                                 setInvoiceForm({
@@ -2295,7 +2452,11 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                                   gst: grn.gst ?? 0,
                                   items: (grn.items || []).map(i => ({ ...i })),
                                   amount: Number(grn.amount) || 0,
-                                  attachments: []
+                                  attachments: [],
+                                  invoiceCurrency: rc?.currencyCode || defaultCur,
+                                  invoiceGroup: '',
+                                  invoiceSource: defaultSrc,
+                                  invoiceType: 'Standard',
                                 });
                                 setShowForm(true); 
                               }}

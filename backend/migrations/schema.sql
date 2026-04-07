@@ -136,7 +136,8 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
   shipping_address_id VARCHAR(64),
   billing_address_id VARCHAR(64),
   is_advance_po BOOLEAN,
-  advance_percentage NUMERIC(5,2)
+  advance_percentage NUMERIC(5,2),
+  currency_code VARCHAR(8) NOT NULL DEFAULT 'INR'
 );
 
 CREATE TABLE IF NOT EXISTS grns (
@@ -191,7 +192,54 @@ CREATE TABLE IF NOT EXISTS invoices (
   shipping_address_id VARCHAR(64),
   billing_address_id VARCHAR(64),
   tds NUMERIC(5,2),
-  gst NUMERIC(5,2)
+  gst NUMERIC(5,2),
+  oracle_invoice_id VARCHAR(64),
+  oracle_sync_status VARCHAR(32),
+  oracle_sync_response JSONB NOT NULL DEFAULT '{}',
+  oracle_tax_response JSONB NOT NULL DEFAULT '{}',
+  oracle_sync_error JSONB,
+  invoice_currency VARCHAR(8) NOT NULL DEFAULT 'INR',
+  invoice_group VARCHAR(255),
+  accounting_date DATE,
+  invoice_source VARCHAR(64) NOT NULL DEFAULT 'P2P',
+  invoice_type VARCHAR(32) NOT NULL DEFAULT 'Standard'
+);
+
+CREATE TABLE IF NOT EXISTS direct_invoices (
+  id VARCHAR(64) PRIMARY KEY,
+  entity_name VARCHAR(255) NOT NULL,
+  vendor_site_id VARCHAR(64),
+  location VARCHAR(255),
+  department VARCHAR(255),
+  sub_department VARCHAR(255),
+  invoice_number VARCHAR(255),
+  invoice_date DATE,
+  items JSONB NOT NULL DEFAULT '[]',
+  amount NUMERIC(18,2) NOT NULL DEFAULT 0,
+  status VARCHAR(32) NOT NULL,
+  current_step_index INTEGER NOT NULL DEFAULT 0,
+  rejection_remarks TEXT,
+  created_by VARCHAR(64),
+  created_at TIMESTAMPTZ,
+  center_names JSONB,
+  attachments JSONB NOT NULL DEFAULT '[]',
+  shipping_address_id VARCHAR(64),
+  billing_address_id VARCHAR(64),
+  tds NUMERIC(5,2),
+  gst NUMERIC(5,2),
+  remarks TEXT,
+  overall_summary TEXT,
+  workflow_step_history JSONB NOT NULL DEFAULT '[]',
+  invoice_currency VARCHAR(8) NOT NULL DEFAULT 'INR',
+  invoice_group VARCHAR(255),
+  accounting_date DATE,
+  invoice_source VARCHAR(64) NOT NULL DEFAULT 'P2P',
+  invoice_type VARCHAR(32) NOT NULL DEFAULT 'Standard',
+  oracle_invoice_id VARCHAR(64),
+  oracle_sync_status VARCHAR(32),
+  oracle_sync_response JSONB NOT NULL DEFAULT '{}',
+  oracle_tax_response JSONB NOT NULL DEFAULT '{}',
+  oracle_sync_error JSONB
 );
 
 CREATE TABLE IF NOT EXISTS budgets (

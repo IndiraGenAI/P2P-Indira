@@ -264,7 +264,8 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     shippingAddressId: '',
     billingAddressId: '',
     isUnbudgeted: false,
-    unbudgetedJustification: ''
+    unbudgetedJustification: '',
+    currencyCode: (masters['Currency']?.[0]?.name as string | undefined) || 'INR',
   });
 
   // Handle pending PR
@@ -297,7 +298,8 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
         shippingAddressId: pendingPR.shippingAddressId || '',
         billingAddressId: pendingPR.billingAddressId || '',
         isUnbudgeted: pendingPR.isUnbudgeted,
-        unbudgetedJustification: pendingPR.unbudgetedJustification
+        unbudgetedJustification: pendingPR.unbudgetedJustification,
+        currencyCode: (pendingPR as Partial<PurchaseOrder>).currencyCode || (masters['Currency']?.[0]?.name as string | undefined) || 'INR',
       });
     }
   }, [pendingPR]);
@@ -564,7 +566,11 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     overallSummary: '',
     attachments: [],
     shippingAddressId: '',
-    billingAddressId: ''
+    billingAddressId: '',
+    invoiceCurrency: (masters['Currency']?.[0]?.name as string | undefined) || 'INR',
+    invoiceGroup: '',
+    invoiceSource: (masters['Invoice Source']?.find((s) => s.name === 'P2P')?.name as string | undefined) || (masters['Invoice Source']?.[0]?.name as string | undefined) || 'P2P',
+    invoiceType: 'Standard',
   });
 
   // Update total amount whenever items change
@@ -943,6 +949,12 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
 
   const handleCreateInvoice = () => {
     if (!selectedGRN) return;
+    const poForInv = purchaseOrders.find((p) => p.id === selectedGRN.purchaseOrderId);
+    const defaultCur = (masters['Currency']?.[0]?.name as string | undefined) || 'INR';
+    const defaultSrc =
+      (masters['Invoice Source']?.find((s) => s.name === 'P2P')?.name as string | undefined) ||
+      (masters['Invoice Source']?.[0]?.name as string | undefined) ||
+      'P2P';
     const newInvoice: Invoice = {
       ...invoiceForm as Invoice,
       id: `INV-${Math.floor(Math.random() * 10000)}`,
@@ -953,7 +965,11 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       createdAt: new Date().toISOString(),
       createdBy: currentUser.id,
       attachments: invoiceForm.attachments || [],
-      workflowStepHistory: [{ action: 'submit', userId: currentUser.id, at: new Date().toISOString(), stepIndex: 0 }]
+      workflowStepHistory: [{ action: 'submit', userId: currentUser.id, at: new Date().toISOString(), stepIndex: 0 }],
+      invoiceCurrency: invoiceForm.invoiceCurrency || poForInv?.currencyCode || defaultCur,
+      invoiceGroup: invoiceForm.invoiceGroup,
+      invoiceSource: invoiceForm.invoiceSource || defaultSrc,
+      invoiceType: invoiceForm.invoiceType || (poForInv?.isAdvancePO ? 'Prepayment' : 'Standard'),
     };
     setInvoices([...invoices, newInvoice]);
     setShowForm(false);
@@ -968,12 +984,36 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       centerNames: [], items: [{ id: Math.random().toString(), itemName: '', desc: '', quantity: 1, rate: 0, amount: 0, remarks: '', coaCode: '', centerName: '' }], // line gst omitted = follow header
       tds: 0, gst: 0, amount: 0, remarks: '', overallSummary: '', attachments: [],
       shippingAddressId: '', billingAddressId: '',
-      isUnbudgeted: false, unbudgetedJustification: ''
+      isUnbudgeted: false, unbudgetedJustification: '',
+      currencyCode: (masters['Currency']?.[0]?.name as string | undefined) || 'INR',
     });
     setGrnForm({ vendorSiteId: '', location: '', invoiceNumber: '', invoiceDate: '', department: '', subDepartment: '', tds: 0, gst: 0, items: [], amount: 0, remarks: '', overallSummary: '', attachments: [], shippingAddressId: '', billingAddressId: '' });
-    setInvoiceForm({ vendorSiteId: '', location: '', remarks: '', overallSummary: '', attachments: [], shippingAddressId: '', billingAddressId: '' });
+    setInvoiceForm({
+      entityName: masters.Entity?.[0]?.name || '',
+      vendorSiteId: '',
+      location: '',
+      remarks: '',
+      overallSummary: '',
+      attachments: [],
+      shippingAddressId: '',
+      billingAddressId: '',
+      invoiceCurrency: (masters['Currency']?.[0]?.name as string | undefined) || 'INR',
+      invoiceGroup: '',
+      invoiceSource:
+        (masters['Invoice Source']?.find((s) => s.name === 'P2P')?.name as string | undefined) ||
+        (masters['Invoice Source']?.[0]?.name as string | undefined) ||
+        'P2P',
+      invoiceType: 'Standard',
+    });
     setSelectedPO(null);
     setSelectedGRN(null);
+  };
+
+  /** Closes the overlay form and clears App-side PR→PO handoff so the list view does not reopen on next navigation. */
+  const closeFormAndDismissPendingPR = () => {
+    setShowForm(false);
+    resetForms();
+    if (pendingPR) onPOCreated();
   };
 
   const poGrns = grns.filter(g => g.purchaseOrderId);
@@ -1297,7 +1337,8 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       );
 
       if (!rule || inv.currentStepIndex >= rule.approvalChain.length - 1) {
-        return addAuditEntry({ ...inv, status: 'Approved' }, 'approve');
+        const acc = inv.accountingDate || getTodayISTDate();
+        return addAuditEntry({ ...inv, status: 'Approved', accountingDate: acc }, 'approve');
       }
 
       return addAuditEntry({ ...inv, currentStepIndex: inv.currentStepIndex + 1 }, 'approve');
@@ -1316,7 +1357,14 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
           {(['PO', 'GRN', 'Invoice'] as ViewMode[]).map(mode => (
             <button
               key={mode}
-              onClick={() => { setViewMode(mode); setShowForm(false); }}
+              onClick={() => {
+                setViewMode(mode);
+                setShowForm(false);
+                if (pendingPR) {
+                  onPOCreated();
+                  resetForms();
+                }
+              }}
               className={`px-4 py-2 rounded-lg font-bold transition-all ${
                 viewMode === mode ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100'
               }`}
@@ -1436,6 +1484,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                  selectedPO ? (selectedGRN ? 'Create Invoice' : 'Create GRN') : 'New Purchase Order'}
               </h3>
               {(poForm.id || grnForm.id || invoiceForm.id) && (
+                <>
                 <button
                   onClick={() => {
                     if (poForm.id) return downloadPdf('po', poForm.id);
@@ -1446,9 +1495,10 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                 >
                   {downloadingDocId === (poForm.id || grnForm.id || invoiceForm.id) ? 'Downloading...' : 'Download PDF'}
                 </button>
+                </>
               )}
             </div>
-            <button onClick={() => { setShowForm(false); resetForms(); }} className="text-slate-400 hover:text-slate-600">
+            <button onClick={closeFormAndDismissPendingPR} className="text-slate-400 hover:text-slate-600">
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
             </button>
           </div>
@@ -1527,6 +1577,24 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                   >
                     <option value="0">Select GST</option>
                     {(masters.GST ?? []).map(g => <option key={g.id} value={g.rate}>{g.name}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-black text-slate-500 uppercase tracking-wider">PO currency (Oracle)</label>
+                  <select
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
+                    value={poForm.currencyCode || 'INR'}
+                    onChange={(e) => setPoForm({ ...poForm, currencyCode: e.target.value })}
+                  >
+                    {(masters['Currency'] ?? []).length === 0 ? (
+                      <option value="INR">INR</option>
+                    ) : (
+                      (masters['Currency'] ?? []).map((c) => (
+                        <option key={c.id} value={c.name}>
+                          {c.name}
+                        </option>
+                      ))
+                    )}
                   </select>
                 </div>
                 <div className="space-y-2">
@@ -2222,6 +2290,96 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                   </select>
                 </div>
 
+                <div className="col-span-2 space-y-3 p-4 rounded-2xl border border-slate-200 bg-slate-50/80">
+                  <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider">Fusion / Oracle invoice header</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Invoice currency</label>
+                      <select
+                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
+                        value={invoiceForm.invoiceCurrency || (selectedPO?.currencyCode as string | undefined) || 'INR'}
+                        onChange={(e) => setInvoiceForm({ ...invoiceForm, invoiceCurrency: e.target.value })}
+                        disabled={invoiceForm.status === 'Approved'}
+                      >
+                        {(masters['Currency'] ?? []).length === 0 ? (
+                          <option value="INR">INR</option>
+                        ) : (
+                          (masters['Currency'] ?? []).map((c) => (
+                            <option key={c.id} value={c.name}>
+                              {c.name}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Invoice group</label>
+                      <input
+                        type="text"
+                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
+                        value={invoiceForm.invoiceGroup ?? ''}
+                        onChange={(e) => setInvoiceForm({ ...invoiceForm, invoiceGroup: e.target.value })}
+                        disabled={invoiceForm.status === 'Approved'}
+                        placeholder="Optional"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Invoice source</label>
+                      <select
+                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
+                        value={invoiceForm.invoiceSource || 'P2P'}
+                        onChange={(e) => setInvoiceForm({ ...invoiceForm, invoiceSource: e.target.value })}
+                        disabled={invoiceForm.status === 'Approved'}
+                      >
+                        {(masters['Invoice Source'] ?? []).length === 0 ? (
+                          <option value="P2P">P2P</option>
+                        ) : (
+                          (masters['Invoice Source'] ?? []).map((s) => (
+                            <option key={s.id} value={s.name}>
+                              {s.name}
+                            </option>
+                          ))
+                        )}
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Invoice type</label>
+                      <select
+                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
+                        value={invoiceForm.invoiceType || 'Standard'}
+                        onChange={(e) => setInvoiceForm({ ...invoiceForm, invoiceType: e.target.value })}
+                        disabled={invoiceForm.status === 'Approved'}
+                      >
+                        <option value="Standard">Standard</option>
+                        <option value="Prepayment">Prepayment</option>
+                        <option value="Debit memo">Debit memo</option>
+                      </select>
+                    </div>
+                    {(invoiceForm.accountingDate || invoiceForm.oracleInvoiceId || invoiceForm.oracleSyncStatus) && (
+                      <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                        {invoiceForm.accountingDate && (
+                          <div>
+                            <span className="text-slate-400 font-bold uppercase tracking-wider">Accounting date</span>
+                            <div className="font-bold text-slate-800 mt-0.5">{invoiceForm.accountingDate}</div>
+                          </div>
+                        )}
+                        {invoiceForm.oracleInvoiceId && (
+                          <div>
+                            <span className="text-slate-400 font-bold uppercase tracking-wider">Oracle invoice id</span>
+                            <div className="font-bold text-slate-800 mt-0.5">{invoiceForm.oracleInvoiceId}</div>
+                          </div>
+                        )}
+                        {invoiceForm.oracleSyncStatus && (
+                          <div>
+                            <span className="text-slate-400 font-bold uppercase tracking-wider">Oracle sync</span>
+                            <div className="font-bold text-slate-800 mt-0.5">{invoiceForm.oracleSyncStatus}</div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 <div className="col-span-2 space-y-4 mt-4">
                   <div className="flex justify-between items-center">
                     <h4 className="text-sm font-black text-slate-700 uppercase tracking-wider">Invoice Items</h4>
@@ -2424,7 +2582,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
 
           <div className="mt-8 flex justify-end space-x-4">
             <button 
-              onClick={() => { setShowForm(false); resetForms(); }}
+              onClick={closeFormAndDismissPendingPR}
               className="px-6 py-3 rounded-xl font-black text-slate-500 hover:bg-slate-50 transition-colors"
             >
               Cancel
@@ -2583,6 +2741,9 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
 
               {viewMode === 'GRN' && filteredPoGrns.map(grn => {
                 const po = purchaseOrders.find(p => p.id === grn.purchaseOrderId);
+                const vendorName = po
+                  ? (masters.Vendor ?? []).find((v) => v.id === po.vendorId)?.name || '—'
+                  : '—';
                 return (
                   <tr key={grn.id} className="hover:bg-slate-50/50 transition-colors">
                     <td className="px-6 py-4">
@@ -2590,8 +2751,22 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                       <div className="text-[10px] text-slate-400 font-bold">Against {grn.purchaseOrderId}</div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="text-sm font-bold text-slate-700">{grn.location}</div>
-                      <div className="text-xs text-slate-500">Inv: {grn.invoiceNumber} • {grn.items.length} Items • Total: ₹{(Number(grn.amount) || 0).toFixed(2)}</div>
+                      <div className="text-sm font-bold text-slate-700">
+                        {grn.createdAt ? new Date(grn.createdAt).toLocaleDateString() : '—'}
+                      </div>
+                      <div className="text-xs text-slate-500 mt-0.5">
+                        {grn.location ? `${grn.location} • ` : ''}Inv: {grn.invoiceNumber || '—'} • {grn.items.length} Items • Total: ₹{(Number(grn.amount) || 0).toFixed(2)}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 min-w-0">
+                      <div className="text-sm font-bold text-slate-700 truncate" title={vendorName}>
+                        {vendorName}
+                      </div>
+                      {po && (
+                        <div className="text-xs text-slate-500 truncate">
+                          {(masters['Vendor Site'] ?? []).find((s: { id: string }) => s.id === po.vendorSiteId)?.name || ''}
+                        </div>
+                      )}
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex flex-col space-y-1">
@@ -2612,7 +2787,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="flex space-x-2">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                         <button
                           onClick={() => {
                             setGrnForm(grn);
@@ -2620,44 +2795,55 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                             setSelectedGRN(null);
                             setShowForm(true);
                           }}
-                          className="text-xs font-black text-slate-600 hover:underline"
+                          className="text-xs font-black text-slate-600 hover:underline whitespace-nowrap shrink-0"
                         >
                           View
                         </button>
                         {canCompleteReview(grn) && (
-                          <button onClick={() => completeReviewGRN(grn.id)} className="text-xs font-black text-amber-600 hover:underline">Complete Review</button>
+                          <button onClick={() => completeReviewGRN(grn.id)} className="text-xs font-black text-amber-600 hover:underline whitespace-nowrap shrink-0">Complete Review</button>
                         )}
                         {canApprove(grn) && (
-                          <button onClick={() => approveGRN(grn.id)} className="text-xs font-black text-emerald-600 hover:underline">Approve</button>
+                          <button onClick={() => approveGRN(grn.id)} className="text-xs font-black text-emerald-600 hover:underline whitespace-nowrap shrink-0">Approve</button>
                         )}
                         {grn.status === 'Approved' && (
                           <>
                             <button 
                               onClick={() => { 
                                 const resolvedPO = po || purchaseOrders.find(p => p.id === grn.purchaseOrderId) || null;
+                                const defaultCur = (masters['Currency']?.[0]?.name as string | undefined) || 'INR';
+                                const defaultSrc =
+                                  (masters['Invoice Source']?.find((s) => s.name === 'P2P')?.name as string | undefined) ||
+                                  (masters['Invoice Source']?.[0]?.name as string | undefined) ||
+                                  'P2P';
                                 setSelectedPO(resolvedPO); 
                                 setSelectedGRN(grn);
                                 setInvoiceForm({
                                   entityName: grn.entityName,
                                   vendorSiteId: grn.vendorSiteId || '',
                                   location: grn.location || '',
+                                  department: grn.department || '',
+                                  subDepartment: grn.subDepartment || '',
                                   shippingAddressId: grn.shippingAddressId || '',
                                   billingAddressId: grn.billingAddressId || '',
                                   remarks: grn.remarks || '',
                                   overallSummary: grn.overallSummary || '',
                                   items: (grn.items || []).map(i => ({ ...i })),
                                   amount: Number(grn.amount) || 0,
-                                  attachments: []
+                                  attachments: [],
+                                  invoiceCurrency: resolvedPO?.currencyCode || defaultCur,
+                                  invoiceGroup: '',
+                                  invoiceSource: defaultSrc,
+                                  invoiceType: resolvedPO?.isAdvancePO ? 'Prepayment' : 'Standard',
                                 });
                                 setShowForm(true); 
                               }}
-                              className="text-xs font-black text-indigo-600 hover:underline"
+                              className="text-xs font-black text-indigo-600 hover:underline whitespace-nowrap shrink-0"
                             >
                               Create Invoice
                             </button>
                             <button 
                               onClick={() => reverseGRN(grn.id)}
-                              className="text-xs font-black text-rose-600 hover:underline"
+                              className="text-xs font-black text-rose-600 hover:underline whitespace-nowrap shrink-0"
                             >
                               Reverse
                             </button>
@@ -2669,66 +2855,87 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                 );
               })}
 
-              {viewMode === 'Invoice' && filteredPoInvoices.map(inv => (
-                <tr key={inv.id} className="hover:bg-slate-50/50 transition-colors">
-                  <td className="px-6 py-4">
-                    <div className="text-sm font-black text-slate-900">{inv.id}</div>
-                    <div className="text-[10px] text-slate-400 font-bold">Against {inv.grnId}</div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="text-sm font-bold text-slate-700">{inv.location}</div>
-                    <div className="text-xs text-slate-500">{new Date(inv.createdAt).toLocaleDateString()}</div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex flex-col space-y-1">
-                      <button
-                        onClick={() => { setSelectedAuditDoc(inv); setShowAuditModal(true); }}
-                        className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider w-fit ${
-                        inv.status === 'Approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
-                        }`}
-                        title="View audit log"
-                      >
-                        {inv.status}
-                      </button>
-                      {inv.status === 'Pending' && (
-                        <div className="text-[10px] font-bold text-slate-400">
-                          Step {inv.currentStepIndex + 1}
+              {viewMode === 'Invoice' && filteredPoInvoices.map(inv => {
+                const invGrn = grns.find((g) => g.id === inv.grnId);
+                const invPo = invGrn ? purchaseOrders.find((p) => p.id === invGrn.purchaseOrderId) : undefined;
+                const invVendorName = invPo
+                  ? (masters.Vendor ?? []).find((v) => v.id === invPo.vendorId)?.name || '—'
+                  : '—';
+                return (
+                  <tr key={inv.id} className="hover:bg-slate-50/50 transition-colors">
+                    <td className="px-6 py-4">
+                      <div className="text-sm font-black text-slate-900">{inv.id}</div>
+                      <div className="text-[10px] text-slate-400 font-bold">Against {inv.grnId}</div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="text-sm font-bold text-slate-700">
+                        {inv.createdAt ? new Date(inv.createdAt).toLocaleDateString() : '—'}
+                      </div>
+                      <div className="text-xs text-slate-500 mt-0.5">
+                        {inv.location ? `${inv.location} • ` : ''}₹{(Number(inv.amount) || 0).toFixed(2)}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 min-w-0">
+                      <div className="text-sm font-bold text-slate-700 truncate" title={invVendorName}>
+                        {invVendorName}
+                      </div>
+                      {invPo && (
+                        <div className="text-xs text-slate-500 truncate">
+                          {(masters['Vendor Site'] ?? []).find((s: { id: string }) => s.id === invPo.vendorSiteId)?.name || ''}
                         </div>
                       )}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="flex space-x-2">
-                      <button
-                        onClick={() => {
-                          setInvoiceForm(inv);
-                          const grn = grns.find((g) => g.id === inv.grnId);
-                          setSelectedGRN(grn || null);
-                          setSelectedPO((grn && purchaseOrders.find((p) => p.id === grn.purchaseOrderId)) || null);
-                          setShowForm(true);
-                        }}
-                        className="text-xs font-black text-slate-600 hover:underline"
-                      >
-                        View
-                      </button>
-                      {canCompleteReview(inv) && (
-                        <button onClick={() => completeReviewInvoice(inv.id)} className="text-xs font-black text-amber-600 hover:underline">Complete Review</button>
-                      )}
-                      {canApprove(inv) && (
-                        <button onClick={() => approveInvoice(inv.id)} className="text-xs font-black text-emerald-600 hover:underline">Approve</button>
-                      )}
-                      {inv.status === 'Approved' && (
-                        <button 
-                          onClick={() => reverseInvoice(inv.id)}
-                          className="text-xs font-black text-rose-600 hover:underline"
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex flex-col space-y-1">
+                        <button
+                          onClick={() => { setSelectedAuditDoc(inv); setShowAuditModal(true); }}
+                          className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider w-fit ${
+                          inv.status === 'Approved' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                          }`}
+                          title="View audit log"
                         >
-                          Reverse
+                          {inv.status}
                         </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                        {inv.status === 'Pending' && (
+                          <div className="text-[10px] font-bold text-slate-400">
+                            Step {inv.currentStepIndex + 1}
+                          </div>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <button
+                          onClick={() => {
+                            setInvoiceForm(inv);
+                            const grn = grns.find((g) => g.id === inv.grnId);
+                            setSelectedGRN(grn || null);
+                            setSelectedPO((grn && purchaseOrders.find((p) => p.id === grn.purchaseOrderId)) || null);
+                            setShowForm(true);
+                          }}
+                          className="text-xs font-black text-slate-600 hover:underline whitespace-nowrap shrink-0"
+                        >
+                          View
+                        </button>
+                        {canCompleteReview(inv) && (
+                          <button onClick={() => completeReviewInvoice(inv.id)} className="text-xs font-black text-amber-600 hover:underline whitespace-nowrap shrink-0">Complete Review</button>
+                        )}
+                        {canApprove(inv) && (
+                          <button onClick={() => approveInvoice(inv.id)} className="text-xs font-black text-emerald-600 hover:underline whitespace-nowrap shrink-0">Approve</button>
+                        )}
+                        {inv.status === 'Approved' && (
+                          <button 
+                            onClick={() => reverseInvoice(inv.id)}
+                            className="text-xs font-black text-rose-600 hover:underline whitespace-nowrap shrink-0"
+                          >
+                            Reverse
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
 
               {((viewMode === 'PO' && purchaseOrders.length === 0) ||
                 (viewMode === 'GRN' && poGrns.length === 0) ||

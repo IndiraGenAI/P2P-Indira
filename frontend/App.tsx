@@ -368,6 +368,7 @@ const App: React.FC = () => {
     setPurchaseOrderNavIntent(null);
     setPrNavIntent(null);
     setDiNavIntent(null);
+    setPendingPOFromPR(null);
     setActiveTab(tab);
   };
 

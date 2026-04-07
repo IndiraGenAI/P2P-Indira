@@ -56,6 +56,12 @@ function pct(numerator: number, denominator: number): number {
   return Math.round((numerator / denominator) * 100);
 }
 
+/** Cap 0–100 for progress bar fill width; label can still show raw % when >100. */
+function pctBarWidth(p: number): number {
+  if (!Number.isFinite(p) || p < 0) return 0;
+  return Math.min(100, p);
+}
+
 function flowBarColor(p: number): string {
   if (p > 70) return 'bg-emerald-500';
   if (p >= 40) return 'bg-amber-500';
@@ -287,8 +293,8 @@ const Dashboard: React.FC<DashboardProps> = ({ users, roles, onNavigateFromDashb
                 {(rcC?.totalRC ?? 0).toLocaleString()} → {(rcC?.totalGRNFromRC ?? 0).toLocaleString()}
               </p>
               <p className="mt-2 text-sm font-bold text-slate-600">{rcToGrnPct}% converted</p>
-              <div className="mt-4 h-1.5 w-full rounded-full bg-slate-100">
-                <div className={`h-1.5 rounded-full transition-all ${flowBarColor(rcToGrnPct)}`} style={{ width: `${rcToGrnPct}%` }} />
+              <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                <div className={`h-1.5 rounded-full transition-all ${flowBarColor(rcToGrnPct)}`} style={{ width: `${pctBarWidth(rcToGrnPct)}%` }} />
               </div>
             </div>
             <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
@@ -298,8 +304,8 @@ const Dashboard: React.FC<DashboardProps> = ({ users, roles, onNavigateFromDashb
                 {(rcC?.totalGRNFromRC ?? 0).toLocaleString()} → {(rcC?.totalInvoiceFromRCGRN ?? 0).toLocaleString()}
               </p>
               <p className="mt-2 text-sm font-bold text-slate-600">{rcGrnToInvPct}% invoiced</p>
-              <div className="mt-4 h-1.5 w-full rounded-full bg-slate-100">
-                <div className={`h-1.5 rounded-full transition-all ${flowBarColor(rcGrnToInvPct)}`} style={{ width: `${rcGrnToInvPct}%` }} />
+              <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                <div className={`h-1.5 rounded-full transition-all ${flowBarColor(rcGrnToInvPct)}`} style={{ width: `${pctBarWidth(rcGrnToInvPct)}%` }} />
               </div>
             </div>
             <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
@@ -309,8 +315,8 @@ const Dashboard: React.FC<DashboardProps> = ({ users, roles, onNavigateFromDashb
                 {(poC?.totalPO ?? 0).toLocaleString()} → {(poC?.totalGRNFromPO ?? 0).toLocaleString()}
               </p>
               <p className="mt-2 text-sm font-bold text-slate-600">{poToGrnPct}% converted</p>
-              <div className="mt-4 h-1.5 w-full rounded-full bg-slate-100">
-                <div className={`h-1.5 rounded-full transition-all ${flowBarColor(poToGrnPct)}`} style={{ width: `${poToGrnPct}%` }} />
+              <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                <div className={`h-1.5 rounded-full transition-all ${flowBarColor(poToGrnPct)}`} style={{ width: `${pctBarWidth(poToGrnPct)}%` }} />
               </div>
             </div>
             <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200">
@@ -320,8 +326,8 @@ const Dashboard: React.FC<DashboardProps> = ({ users, roles, onNavigateFromDashb
                 {(poC?.totalGRNFromPO ?? 0).toLocaleString()} → {(poC?.totalInvoiceFromPOGRN ?? 0).toLocaleString()}
               </p>
               <p className="mt-2 text-sm font-bold text-slate-600">{poGrnToInvPct}% invoiced</p>
-              <div className="mt-4 h-1.5 w-full rounded-full bg-slate-100">
-                <div className={`h-1.5 rounded-full transition-all ${flowBarColor(poGrnToInvPct)}`} style={{ width: `${poGrnToInvPct}%` }} />
+              <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+                <div className={`h-1.5 rounded-full transition-all ${flowBarColor(poGrnToInvPct)}`} style={{ width: `${pctBarWidth(poGrnToInvPct)}%` }} />
               </div>
             </div>
           </div>

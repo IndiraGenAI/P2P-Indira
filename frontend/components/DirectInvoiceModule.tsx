@@ -52,6 +52,19 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
   moduleEntryIntent = null,
   onModuleEntryIntentConsumed,
 }) => {
+  const getTodayISTDate = () => {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date());
+    const year = parts.find((p) => p.type === 'year')?.value ?? '';
+    const month = parts.find((p) => p.type === 'month')?.value ?? '';
+    const day = parts.find((p) => p.type === 'day')?.value ?? '';
+    return `${year}-${month}-${day}`;
+  };
+
   const vendorsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Vendor', masters.Vendor ?? []) as MasterRecord[];
   const itemsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Item', masters.Item ?? []) as MasterRecord[];
   const budgetsForDeduction = filterByWorkflowApproval<Budget>(workflowV2Rules, 'Budget', budgets);
@@ -154,7 +167,14 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
     shippingAddressId: '',
     billingAddressId: '',
     isUnbudgeted: false,
-    unbudgetedJustification: ''
+    unbudgetedJustification: '',
+    invoiceCurrency: (masters['Currency']?.[0]?.name as string | undefined) || 'INR',
+    invoiceGroup: '',
+    invoiceSource:
+      (masters['Invoice Source']?.find((s) => s.name === 'P2P')?.name as string | undefined) ||
+      (masters['Invoice Source']?.[0]?.name as string | undefined) ||
+      'P2P',
+    invoiceType: 'Standard',
   });
 
   // Update total amount whenever items change
@@ -307,6 +327,11 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
       return;
     }
 
+    const defaultCur = (masters['Currency']?.[0]?.name as string | undefined) || 'INR';
+    const defaultSrc =
+      (masters['Invoice Source']?.find((s) => s.name === 'P2P')?.name as string | undefined) ||
+      (masters['Invoice Source']?.[0]?.name as string | undefined) ||
+      'P2P';
     const newInvoice: any = {
       ...invoiceForm,
       id: `DINV-${Math.floor(Math.random() * 10000)}`,
@@ -314,6 +339,10 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
       currentStepIndex: 0,
       createdAt: new Date().toISOString(),
       workflowStepHistory: [{ action: 'submit', userId: currentUser.id, at: new Date().toISOString(), stepIndex: 0 }],
+      invoiceCurrency: invoiceForm.invoiceCurrency || defaultCur,
+      invoiceGroup: invoiceForm.invoiceGroup,
+      invoiceSource: invoiceForm.invoiceSource || defaultSrc,
+      invoiceType: invoiceForm.invoiceType || 'Standard',
     };
     setDirectInvoices([...directInvoices, newInvoice]);
     setShowForm(false);
@@ -378,7 +407,14 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
       shippingAddressId: '',
       billingAddressId: '',
       isUnbudgeted: false,
-      unbudgetedJustification: ''
+      unbudgetedJustification: '',
+      invoiceCurrency: (masters['Currency']?.[0]?.name as string | undefined) || 'INR',
+      invoiceGroup: '',
+      invoiceSource:
+        (masters['Invoice Source']?.find((s) => s.name === 'P2P')?.name as string | undefined) ||
+        (masters['Invoice Source']?.[0]?.name as string | undefined) ||
+        'P2P',
+      invoiceType: 'Standard',
     });
   };
 
@@ -475,7 +511,8 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
           return addAuditEntry({ ...inv, status: 'Budget Hold' }, 'approve');
         }
         deductBudget(inv);
-        return addAuditEntry({ ...inv, status: 'Approved' }, 'approve');
+        const acc = inv.accountingDate || getTodayISTDate();
+        return addAuditEntry({ ...inv, status: 'Approved', accountingDate: acc }, 'approve');
       }
 
       return addAuditEntry({ ...inv, currentStepIndex: inv.currentStepIndex + 1 }, 'approve');
@@ -702,6 +739,96 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
                 selected={invoiceForm.centerNames || []}
                 onChange={centers => setInvoiceForm({ ...invoiceForm, centerNames: centers })}
               />
+            </div>
+
+            <div className="col-span-2 space-y-3 p-4 rounded-2xl border border-slate-200 bg-slate-50/80">
+              <h4 className="text-xs font-black text-slate-500 uppercase tracking-wider">Fusion / Oracle invoice header</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Invoice currency</label>
+                  <select
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
+                    value={invoiceForm.invoiceCurrency || 'INR'}
+                    onChange={(e) => setInvoiceForm({ ...invoiceForm, invoiceCurrency: e.target.value })}
+                    disabled={invoiceForm.status === 'Approved'}
+                  >
+                    {(masters['Currency'] ?? []).length === 0 ? (
+                      <option value="INR">INR</option>
+                    ) : (
+                      (masters['Currency'] ?? []).map((c) => (
+                        <option key={c.id} value={c.name}>
+                          {c.name}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Invoice group</label>
+                  <input
+                    type="text"
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
+                    value={invoiceForm.invoiceGroup ?? ''}
+                    onChange={(e) => setInvoiceForm({ ...invoiceForm, invoiceGroup: e.target.value })}
+                    disabled={invoiceForm.status === 'Approved'}
+                    placeholder="Optional"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Invoice source</label>
+                  <select
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
+                    value={invoiceForm.invoiceSource || 'P2P'}
+                    onChange={(e) => setInvoiceForm({ ...invoiceForm, invoiceSource: e.target.value })}
+                    disabled={invoiceForm.status === 'Approved'}
+                  >
+                    {(masters['Invoice Source'] ?? []).length === 0 ? (
+                      <option value="P2P">P2P</option>
+                    ) : (
+                      (masters['Invoice Source'] ?? []).map((s) => (
+                        <option key={s.id} value={s.name}>
+                          {s.name}
+                        </option>
+                      ))
+                    )}
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Invoice type</label>
+                  <select
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
+                    value={invoiceForm.invoiceType || 'Standard'}
+                    onChange={(e) => setInvoiceForm({ ...invoiceForm, invoiceType: e.target.value })}
+                    disabled={invoiceForm.status === 'Approved'}
+                  >
+                    <option value="Standard">Standard</option>
+                    <option value="Prepayment">Prepayment</option>
+                    <option value="Debit memo">Debit memo</option>
+                  </select>
+                </div>
+                {(invoiceForm.accountingDate || invoiceForm.oracleInvoiceId || invoiceForm.oracleSyncStatus) && (
+                  <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                    {invoiceForm.accountingDate && (
+                      <div>
+                        <span className="text-slate-400 font-bold uppercase tracking-wider">Accounting date</span>
+                        <div className="font-bold text-slate-800 mt-0.5">{invoiceForm.accountingDate}</div>
+                      </div>
+                    )}
+                    {invoiceForm.oracleInvoiceId && (
+                      <div>
+                        <span className="text-slate-400 font-bold uppercase tracking-wider">Oracle invoice id</span>
+                        <div className="font-bold text-slate-800 mt-0.5">{invoiceForm.oracleInvoiceId}</div>
+                      </div>
+                    )}
+                    {invoiceForm.oracleSyncStatus && (
+                      <div>
+                        <span className="text-slate-400 font-bold uppercase tracking-wider">Oracle sync</span>
+                        <div className="font-bold text-slate-800 mt-0.5">{String(invoiceForm.oracleSyncStatus)}</div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Items Section */}

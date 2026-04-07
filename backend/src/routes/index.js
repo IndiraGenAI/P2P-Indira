@@ -3,6 +3,12 @@ import jwt from 'jsonwebtoken';
 import pool, { query, rowsToCamel, rowToCamel, objToSnake } from '../db.js';
 import * as sessionTracker from '../sessionTracker.js';
 import { generateDocumentPdf, pdfUtils } from '../services/pdfService.js';
+import {
+  createOracleInvoice,
+  calculateTax,
+  mapInvoiceRowToOraclePayload,
+} from '../services/oracleInvoiceService.js';
+import { onboardSupplier } from '../services/oracleSupplierService.js';
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'p2p-indira-jwt-secret-change-in-production';
@@ -17,8 +23,8 @@ const JSON_COLUMNS = {
   rate_contracts: ['items', 'attachments', 'workflowStepHistory'],
   purchase_orders: ['centerNames', 'items', 'attachments', 'workflowStepHistory'],
   grns: ['items', 'attachments', 'workflowStepHistory'],
-  invoices: ['items', 'attachments', 'workflowStepHistory'],
-  direct_invoices: ['items', 'attachments', 'workflowStepHistory'],
+  invoices: ['items', 'attachments', 'workflowStepHistory', 'oracleSyncResponse', 'oracleTaxResponse', 'oracleSyncError'],
+  direct_invoices: ['items', 'attachments', 'workflowStepHistory', 'oracleSyncResponse', 'oracleTaxResponse', 'oracleSyncError'],
   budgets: ['workflowStepHistory'],
 };
 
@@ -133,17 +139,115 @@ const PDF_COMPANY = {
 };
 
 async function getMasterMaps() {
-  const m = await query("SELECT master_type, id, name, data FROM masters WHERE master_type IN ('Vendor','Vendor Site')");
+  const m = await query("SELECT master_type, id, name, data FROM masters WHERE master_type IN ('Vendor','Vendor Site','Entity','COA','Payment Terms')");
   const vendorById = {};
+  const vendorMetaById = {};
   const vendorSiteById = {};
+  const entityByName = {};
+  const coaOracleByCode = {};
+  const paymentTermsById = {};
   for (const row of m.rows) {
-    if (row.master_type === 'Vendor') vendorById[row.id] = row.name;
+    const data = typeof row.data === 'string' ? (() => { try { return JSON.parse(row.data || '{}'); } catch { return {}; } })() : (row.data || {});
+    if (row.master_type === 'Vendor') {
+      vendorById[row.id] = row.name;
+      vendorMetaById[row.id] = {
+        oracleSupplierName: data.oracleSupplierName,
+        oracleSupplierNumber: data.oracleSupplierNumber,
+      };
+    }
     if (row.master_type === 'Vendor Site') {
-      const data = typeof row.data === 'string' ? (() => { try { return JSON.parse(row.data || '{}'); } catch { return {}; } })() : (row.data || {});
-      vendorSiteById[row.id] = { name: row.name, vendorId: data.vendorId || null };
+      vendorSiteById[row.id] = {
+        name: row.name,
+        vendorId: data.vendorId || null,
+        code: data.code || null,
+        oracleSupplierSiteName: data.oracleSupplierSiteName,
+      };
+    }
+    if (row.master_type === 'Entity') {
+      entityByName[row.name] = {
+        oracleBusinessUnit: data.oracleBusinessUnit,
+        oracleLegalEntity: data.oracleLegalEntity,
+        oracleLiabilityDistribution: data.oracleLiabilityDistribution,
+      };
+    }
+    if (row.master_type === 'COA') {
+      const code = String(data.code || data.coaCode || data.glCode || row.name || '').trim();
+      if (code) {
+        coaOracleByCode[code] = data.oracleDistributionCombination || data.distributionCombination || null;
+      }
+    }
+    if (row.master_type === 'Payment Terms') {
+      paymentTermsById[row.id] = {
+        name: row.name,
+        oraclePaymentTerms: data.oraclePaymentTerms || row.name,
+      };
     }
   }
-  return { vendorById, vendorSiteById };
+  return { vendorById, vendorMetaById, vendorSiteById, entityByName, coaOracleByCode, paymentTermsById };
+}
+
+function supplierNameForOracle(maps, invoice) {
+  const site = invoice.vendorSiteId ? maps.vendorSiteById[invoice.vendorSiteId] : null;
+  const vid = site?.vendorId;
+  const meta = vid ? maps.vendorMetaById[vid] : null;
+  const fromOracle = meta?.oracleSupplierName;
+  const fromVendor = vid ? maps.vendorById[vid] : '';
+  return (
+    fromOracle
+    || site?.oracleSupplierSiteName
+    || site?.name
+    || fromVendor
+    || invoice.vendorSiteId
+    || ''
+  );
+}
+
+function supplierSiteForOracle(maps, invoice) {
+  const site = invoice.vendorSiteId ? maps.vendorSiteById[invoice.vendorSiteId] : null;
+  return (
+    site?.oracleSupplierSiteName
+    || site?.code
+    || site?.name
+    || invoice.vendorSiteId
+    || ''
+  );
+}
+
+function supplierNumberForOracle(maps, invoice) {
+  const site = invoice.vendorSiteId ? maps.vendorSiteById[invoice.vendorSiteId] : null;
+  const vid = site?.vendorId;
+  const meta = vid ? maps.vendorMetaById[vid] : null;
+  return meta?.oracleSupplierNumber || '';
+}
+
+function businessUnitForOracle(maps, invoice) {
+  const ent = invoice.entityName ? maps.entityByName[invoice.entityName] : null;
+  return ent?.oracleBusinessUnit || invoice.entityName || invoice.location || '';
+}
+
+function legalEntityForOracle(maps, invoice) {
+  const ent = invoice.entityName ? maps.entityByName[invoice.entityName] : null;
+  return ent?.oracleLegalEntity || '';
+}
+
+function defaultDistributionForOracle(maps, invoice) {
+  const ent = invoice.entityName ? maps.entityByName[invoice.entityName] : null;
+  return ent?.oracleLiabilityDistribution || '';
+}
+
+function paymentTermsForOracle(maps, invoice) {
+  const ptId = invoice.paymentTerms || invoice.paymentTermsId;
+  if (ptId && maps.paymentTermsById[ptId]) {
+    return maps.paymentTermsById[ptId].oraclePaymentTerms;
+  }
+  if (typeof ptId === 'string' && ptId.trim()) return ptId.trim();
+  return 'Immediate';
+}
+
+function distributionCombinationForItem(maps, item) {
+  const code = String(item?.coaCode || '').trim();
+  const mapped = code ? maps.coaOracleByCode?.[code] : null;
+  return mapped || '';
 }
 
 async function getDocByTable(table, id) {
@@ -157,6 +261,146 @@ async function getDocByTable(table, id) {
     }
   }
   return row;
+}
+
+async function runGrnInvoiceOracleSync(id, { force = false } = {}) {
+  let createRes = null;
+  let oracleId = null;
+  try {
+    const invoice = await getDocByTable('invoices', id);
+    if (!invoice) return { skipped: true, reason: 'not_found' };
+    if (invoice.status !== 'Approved') return { skipped: true, reason: 'not_approved' };
+    if (!force && invoice.oracleSyncStatus === 'SUCCESS' && invoice.oracleInvoiceId) {
+      return { skipped: true, reason: 'already_synced' };
+    }
+
+    await query(`UPDATE invoices SET accounting_date = COALESCE(accounting_date, CURRENT_DATE) WHERE id = $1`, [id]);
+
+    const maps = await getMasterMaps();
+    const supplierName = supplierNameForOracle(maps, invoice);
+    const supplierSite = supplierSiteForOracle(maps, invoice);
+    const bu = businessUnitForOracle(maps, invoice);
+    const legalEntity = legalEntityForOracle(maps, invoice);
+    const defaultDist = defaultDistributionForOracle(maps, invoice);
+    const paymentTerms = paymentTermsForOracle(maps, invoice);
+    const payload = mapInvoiceRowToOraclePayload(invoice, supplierName, {
+      businessUnit: bu,
+      supplier: supplierName,
+      supplierSite,
+      legalEntity,
+      paymentTerms,
+      defaultDistributionCombination: defaultDist,
+      distributionCombinationForItem: (it) => distributionCombinationForItem(maps, it),
+    });
+    createRes = await createOracleInvoice(payload);
+    oracleId = createRes.InvoiceId != null ? String(createRes.InvoiceId) : null;
+
+    let taxRes = null;
+    let taxWarning = null;
+    try {
+      taxRes = await calculateTax({ InvoiceId: oracleId, InvoiceNumber: payload.InvoiceNumber });
+    } catch (taxErr) {
+      taxWarning = taxErr.message || 'calculateTax failed';
+      console.warn('[oracle tax]', id, taxWarning);
+    }
+
+    const syncResponse = { create: createRes, syncedAt: new Date().toISOString(), ...(taxWarning ? { taxWarning } : {}) };
+
+    await query(
+      `UPDATE invoices SET oracle_invoice_id = $1, oracle_sync_status = $2, oracle_sync_response = $3::jsonb, oracle_tax_response = $4::jsonb, oracle_sync_error = NULL WHERE id = $5`,
+      [oracleId, 'SUCCESS', JSON.stringify(syncResponse), JSON.stringify(taxRes), id]
+    );
+
+    return { ok: true, oracleInvoiceId: oracleId, createResponse: createRes, taxResponse: taxRes, taxWarning };
+  } catch (e) {
+    const errPayload = { message: e.message, data: e.data ?? null, at: new Date().toISOString() };
+    try {
+      if (oracleId) {
+        await query(
+          `UPDATE invoices SET oracle_sync_status = $1, oracle_invoice_id = COALESCE(oracle_invoice_id, $2), oracle_sync_response = $3::jsonb, oracle_sync_error = $4::jsonb WHERE id = $5`,
+          ['FAILED', oracleId, JSON.stringify(createRes ? { create: createRes } : {}), JSON.stringify(errPayload), id]
+        );
+      } else {
+        await query(
+          `UPDATE invoices SET oracle_sync_status = $1, oracle_sync_error = $2::jsonb WHERE id = $3`,
+          ['FAILED', JSON.stringify(errPayload), id]
+        );
+      }
+    } catch (dbErr) {
+      console.error('[oracle sync db]', id, dbErr.message);
+    }
+    throw e;
+  }
+}
+
+async function runDirectInvoiceOracleSync(id, { force = false } = {}) {
+  let createRes = null;
+  let oracleId = null;
+  try {
+    const invoice = await getDocByTable('direct_invoices', id);
+    if (!invoice) return { skipped: true, reason: 'not_found' };
+    if (invoice.status !== 'Approved') return { skipped: true, reason: 'not_approved' };
+    if (!force && invoice.oracleSyncStatus === 'SUCCESS' && invoice.oracleInvoiceId) {
+      return { skipped: true, reason: 'already_synced' };
+    }
+
+    await query(`UPDATE direct_invoices SET accounting_date = COALESCE(accounting_date, CURRENT_DATE) WHERE id = $1`, [id]);
+
+    const maps = await getMasterMaps();
+    const supplierName = supplierNameForOracle(maps, invoice);
+    const supplierSite = supplierSiteForOracle(maps, invoice);
+    const bu = businessUnitForOracle(maps, invoice);
+    const legalEntity = legalEntityForOracle(maps, invoice);
+    const defaultDist = defaultDistributionForOracle(maps, invoice);
+    const paymentTerms = paymentTermsForOracle(maps, invoice);
+    const payload = mapInvoiceRowToOraclePayload(invoice, supplierName, {
+      businessUnit: bu,
+      supplier: supplierName,
+      supplierSite,
+      legalEntity,
+      paymentTerms,
+      defaultDistributionCombination: defaultDist,
+      distributionCombinationForItem: (it) => distributionCombinationForItem(maps, it),
+    });
+    createRes = await createOracleInvoice(payload);
+    oracleId = createRes.InvoiceId != null ? String(createRes.InvoiceId) : null;
+
+    let taxRes = null;
+    let taxWarning = null;
+    try {
+      taxRes = await calculateTax({ InvoiceId: oracleId, InvoiceNumber: payload.InvoiceNumber });
+    } catch (taxErr) {
+      taxWarning = taxErr.message || 'calculateTax failed';
+      console.warn('[oracle direct tax]', id, taxWarning);
+    }
+
+    const syncResponse = { create: createRes, syncedAt: new Date().toISOString(), ...(taxWarning ? { taxWarning } : {}) };
+
+    await query(
+      `UPDATE direct_invoices SET oracle_invoice_id = $1, oracle_sync_status = $2, oracle_sync_response = $3::jsonb, oracle_tax_response = $4::jsonb, oracle_sync_error = NULL WHERE id = $5`,
+      [oracleId, 'SUCCESS', JSON.stringify(syncResponse), JSON.stringify(taxRes), id]
+    );
+
+    return { ok: true, oracleInvoiceId: oracleId, createResponse: createRes, taxResponse: taxRes, taxWarning };
+  } catch (e) {
+    const errPayload = { message: e.message, data: e.data ?? null, at: new Date().toISOString() };
+    try {
+      if (oracleId) {
+        await query(
+          `UPDATE direct_invoices SET oracle_sync_status = $1, oracle_invoice_id = COALESCE(oracle_invoice_id, $2), oracle_sync_response = $3::jsonb, oracle_sync_error = $4::jsonb WHERE id = $5`,
+          ['FAILED', oracleId, JSON.stringify(createRes ? { create: createRes } : {}), JSON.stringify(errPayload), id]
+        );
+      } else {
+        await query(
+          `UPDATE direct_invoices SET oracle_sync_status = $1, oracle_sync_error = $2::jsonb WHERE id = $3`,
+          ['FAILED', JSON.stringify(errPayload), id]
+        );
+      }
+    } catch (dbErr) {
+      console.error('[oracle direct sync db]', id, dbErr.message);
+    }
+    throw e;
+  }
 }
 
 function commonSummaryFromItems(items, totalAmount) {
@@ -675,6 +919,27 @@ router.patch('/masters/:masterType/:id/workflow', async (req, res) => {
       : [];
     if (action === 'submit') {
       if (!ruleRow) return res.status(400).json({ error: 'No workflow rule configured for this master' });
+
+      if (masterType === 'Vendor') {
+        const v = data;
+        const missing = [];
+        if (!v.address1) missing.push('Address Line 1');
+        if (!(v.state || v.stateId)) missing.push('State');
+        if (!(v.city || v.cityId)) missing.push('City');
+        if (!v.pincode) missing.push('Pincode');
+        if (!v.countryCode) missing.push('Country');
+        if (v.pan && !v.taxpayerCountryCode) missing.push('Taxpayer Country Code');
+        if (!(v.contactFirstName || v.contactLastName)) missing.push('Contact Name (First or Last)');
+        if (!v.accNo) missing.push('Bank Account Number');
+        if (!v.ifsc && !v.bankIdentifier) missing.push('IFSC Code');
+        if (missing.length) {
+          return res.status(400).json({
+            error: `Cannot submit for approval. Missing required Oracle onboarding fields: ${missing.join(', ')}. Please fill them and Sync again.`,
+          });
+        }
+        console.log('[WorkflowV2] Vendor Oracle field validation passed — submitting to workflow');
+      }
+
       workflowStatus = 'Pending';
       workflowCurrentStepIndex = 0;
       data.workflowStatus = workflowStatus;
@@ -711,6 +976,21 @@ router.patch('/masters/:masterType/:id/workflow', async (req, res) => {
       return res.status(400).json({ error: 'Invalid action' });
     }
     await query('UPDATE masters SET data = $1 WHERE master_type = $2 AND id = $3', [JSON.stringify(data), masterType, id]);
+
+    if (masterType === 'Vendor' && workflowStatus === 'Approved') {
+      console.log(`[WorkflowV2] Vendor "${id}" approved — triggering Oracle Fusion onboarding...`);
+      try {
+        const result = await onboardSupplier(id);
+        if (result.success) {
+          console.log(`[WorkflowV2] Auto-onboard SUCCESS for vendor "${id}": ${result.message}`);
+        } else {
+          console.warn(`[WorkflowV2] Auto-onboard PARTIAL for vendor "${id}": ${result.message}`);
+        }
+      } catch (e) {
+        console.error(`[WorkflowV2] Auto-onboard FAILED for vendor "${id}":`, e.message);
+      }
+    }
+
     const updated = await query('SELECT * FROM masters WHERE master_type = $1 AND id = $2', [masterType, id]);
     const row = updated.rows[0];
     const rec = { id: row.id, name: row.name, status: row.status, ...(row.data || {}) };
@@ -1185,7 +1465,7 @@ router.post('/rate-contracts', async (req, res) => {
 });
 
 // --- PURCHASE ORDERS ---
-const PO_COLS = ['id', 'entity_name', 'vendor_id', 'vendor_site_id', 'transaction_type', 'valid_from', 'valid_to', 'frequency', 'department', 'sub_department', 'payment_terms', 'terms_and_conditions_id', 'center_names', 'items', 'tds', 'gst', 'amount', 'remarks', 'overall_summary', 'attachments', 'workflow_step_history', 'status', 'current_step_index', 'is_unbudgeted', 'unbudgeted_justification', 'unbudgeted_attachment_url', 'rejection_remarks', 'created_by', 'created_at', 'required_date', 'shipping_address_id', 'billing_address_id', 'is_advance_po', 'advance_percentage'];
+const PO_COLS = ['id', 'entity_name', 'vendor_id', 'vendor_site_id', 'transaction_type', 'valid_from', 'valid_to', 'frequency', 'department', 'sub_department', 'payment_terms', 'terms_and_conditions_id', 'center_names', 'items', 'tds', 'gst', 'amount', 'remarks', 'overall_summary', 'attachments', 'workflow_step_history', 'status', 'current_step_index', 'is_unbudgeted', 'unbudgeted_justification', 'unbudgeted_attachment_url', 'rejection_remarks', 'created_by', 'created_at', 'required_date', 'shipping_address_id', 'billing_address_id', 'is_advance_po', 'advance_percentage', 'currency_code'];
 router.get('/purchase-orders', async (req, res) => {
   try {
     const rows = await getAll('purchase_orders');
@@ -1313,7 +1593,7 @@ router.post('/grns', async (req, res) => {
 });
 
 // --- INVOICES ---
-const INV_COLS = ['id', 'entity_name', 'grn_id', 'vendor_site_id', 'location', 'department', 'sub_department', 'invoice_number', 'invoice_date', 'items', 'amount', 'remarks', 'overall_summary', 'workflow_step_history', 'status', 'current_step_index', 'rejection_remarks', 'created_by', 'created_at', 'attachments', 'shipping_address_id', 'billing_address_id', 'tds', 'gst'];
+const INV_COLS = ['id', 'entity_name', 'grn_id', 'vendor_site_id', 'location', 'department', 'sub_department', 'invoice_number', 'invoice_date', 'items', 'amount', 'remarks', 'overall_summary', 'workflow_step_history', 'status', 'current_step_index', 'rejection_remarks', 'created_by', 'created_at', 'attachments', 'shipping_address_id', 'billing_address_id', 'tds', 'gst', 'invoice_currency', 'invoice_group', 'accounting_date', 'invoice_source', 'invoice_type'];
 router.get('/invoices', async (req, res) => {
   try {
     const rows = await getAll('invoices');
@@ -1324,29 +1604,79 @@ router.get('/invoices', async (req, res) => {
 });
 router.post('/invoices', async (req, res) => {
   try {
+    const raw = Array.isArray(req.body) ? req.body : [req.body];
+    const prevStatus = new Map();
+    for (const row of raw) {
+      if (row?.id) {
+        const prev = await query('SELECT status FROM invoices WHERE id = $1', [row.id]);
+        if (prev.rows[0]) prevStatus.set(row.id, prev.rows[0].status);
+      }
+    }
     const body = Array.isArray(req.body)
       ? req.body.map((row) => {
           const r = { ...row };
           if (r.invoiceDate === '') r.invoiceDate = null;
           if (r.createdAt === '') r.createdAt = null;
+          if (r.accountingDate === '') r.accountingDate = null;
           return r;
         })
       : (() => {
           const r = { ...req.body };
           if (r.invoiceDate === '') r.invoiceDate = null;
           if (r.createdAt === '') r.createdAt = null;
+          if (r.accountingDate === '') r.accountingDate = null;
           return r;
         })();
     await buildUpsert('invoices', 'id', INV_COLS, body);
     const rows = await getAll('invoices');
+    for (const row of raw) {
+      if (!row?.id) continue;
+      const old = prevStatus.get(row.id);
+      const newStatus = row.status;
+      if (newStatus === 'Approved' && old !== 'Approved') {
+        runGrnInvoiceOracleSync(row.id).catch((err) => console.error('[oracle auto sync]', row.id, err.message));
+      }
+    }
     res.json(rows);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
+router.post('/invoices/:id/sync-oracle', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await runGrnInvoiceOracleSync(id, { force: true });
+    if (result?.skipped) {
+      if (result.reason === 'not_found') return res.status(404).json({ error: 'Invoice not found' });
+      return res.json({
+        ok: true,
+        skipped: true,
+        reason: result.reason,
+        message:
+          result.reason === 'already_synced'
+            ? 'Already synced.'
+            : result.reason === 'not_approved'
+              ? 'Invoice must be Approved before Oracle sync.'
+              : 'Sync skipped.',
+      });
+    }
+    return res.json({
+      ok: true,
+      message: 'Invoice synced to Oracle.',
+      oracleInvoiceId: result.oracleInvoiceId,
+      createResponse: result.createResponse,
+      taxResponse: result.taxResponse,
+      ...(result.taxWarning ? { taxWarning: result.taxWarning } : {}),
+    });
+  } catch (e) {
+    const status = e.status >= 400 && e.status < 600 ? e.status : 502;
+    return res.status(status).json({ error: e.message || 'Oracle sync failed', details: e.data });
+  }
+});
+
 // --- DIRECT INVOICES (standalone; no GRN link) ---
-const DIRECT_INV_COLS = ['id', 'entity_name', 'vendor_site_id', 'location', 'department', 'sub_department', 'invoice_number', 'invoice_date', 'items', 'amount', 'remarks', 'overall_summary', 'workflow_step_history', 'status', 'current_step_index', 'rejection_remarks', 'created_by', 'created_at', 'center_names', 'attachments', 'shipping_address_id', 'billing_address_id', 'tds', 'gst'];
+const DIRECT_INV_COLS = ['id', 'entity_name', 'vendor_site_id', 'location', 'department', 'sub_department', 'invoice_number', 'invoice_date', 'items', 'amount', 'remarks', 'overall_summary', 'workflow_step_history', 'status', 'current_step_index', 'rejection_remarks', 'created_by', 'created_at', 'center_names', 'attachments', 'shipping_address_id', 'billing_address_id', 'tds', 'gst', 'invoice_currency', 'invoice_group', 'accounting_date', 'invoice_source', 'invoice_type'];
 router.get('/direct-invoices', async (req, res) => {
   try {
     const rows = await getAll('direct_invoices');
@@ -1357,24 +1687,74 @@ router.get('/direct-invoices', async (req, res) => {
 });
 router.post('/direct-invoices', async (req, res) => {
   try {
+    const raw = Array.isArray(req.body) ? req.body : [req.body];
+    const prevStatus = new Map();
+    for (const row of raw) {
+      if (row?.id) {
+        const prev = await query('SELECT status FROM direct_invoices WHERE id = $1', [row.id]);
+        if (prev.rows[0]) prevStatus.set(row.id, prev.rows[0].status);
+      }
+    }
     const body = Array.isArray(req.body)
       ? req.body.map((row) => {
           const r = { ...row };
           if (r.invoiceDate === '') r.invoiceDate = null;
           if (r.createdAt === '') r.createdAt = null;
+          if (r.accountingDate === '') r.accountingDate = null;
           return r;
         })
       : (() => {
           const r = { ...req.body };
           if (r.invoiceDate === '') r.invoiceDate = null;
           if (r.createdAt === '') r.createdAt = null;
+          if (r.accountingDate === '') r.accountingDate = null;
           return r;
         })();
     await buildUpsert('direct_invoices', 'id', DIRECT_INV_COLS, body);
     const rows = await getAll('direct_invoices');
+    for (const row of raw) {
+      if (!row?.id) continue;
+      const old = prevStatus.get(row.id);
+      const newStatus = row.status;
+      if (newStatus === 'Approved' && old !== 'Approved') {
+        runDirectInvoiceOracleSync(row.id).catch((err) => console.error('[oracle auto sync direct]', row.id, err.message));
+      }
+    }
     res.json(rows);
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+router.post('/direct-invoices/:id/sync-oracle', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const result = await runDirectInvoiceOracleSync(id, { force: true });
+    if (result?.skipped) {
+      if (result.reason === 'not_found') return res.status(404).json({ error: 'Direct invoice not found' });
+      return res.json({
+        ok: true,
+        skipped: true,
+        reason: result.reason,
+        message:
+          result.reason === 'already_synced'
+            ? 'Already synced.'
+            : result.reason === 'not_approved'
+              ? 'Invoice must be Approved before Oracle sync.'
+              : 'Sync skipped.',
+      });
+    }
+    return res.json({
+      ok: true,
+      message: 'Direct invoice synced to Oracle.',
+      oracleInvoiceId: result.oracleInvoiceId,
+      createResponse: result.createResponse,
+      taxResponse: result.taxResponse,
+      ...(result.taxWarning ? { taxWarning: result.taxWarning } : {}),
+    });
+  } catch (e) {
+    const status = e.status >= 400 && e.status < 600 ? e.status : 502;
+    return res.status(status).json({ error: e.message || 'Oracle sync failed', details: e.data });
   }
 });
 

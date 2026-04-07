@@ -57,7 +57,8 @@ export type MasterType =
   | 'COA' | 'TDS' | 'GST' | 'Cost Center'
   | 'Country' | 'Zone' | 'State' | 'City'
   | 'Payment Terms' | 'Terms & Conditions' | 'Center' | 'Entity' | 'Voucher'
-  | 'Vendor Category' | 'Applicant Type' | 'Item Category' | 'UOM' | 'Budget';
+  | 'Vendor Category' | 'Applicant Type' | 'Item Category' | 'UOM' | 'Budget'
+  | 'Currency' | 'Invoice Source';
 
 export enum BudgetType {
   OPEX = 'OPEX',
@@ -221,6 +222,8 @@ export interface RateContract {
   shippingAddressId?: string;
   billingAddressId?: string;
   workflowStepHistory?: WorkflowStepHistoryEntry[];
+  /** PO/RC currency; flows to invoice as Oracle InvoiceCurrency. */
+  currencyCode?: string;
 }
 
 export interface PurchaseOrder {
@@ -257,6 +260,8 @@ export interface PurchaseOrder {
   billingAddressId?: string;
   isAdvancePO?: boolean;
   advancePercentage?: number;
+  /** PO currency; flows to invoice as Oracle InvoiceCurrency. */
+  currencyCode?: string;
   workflowStepHistory?: WorkflowStepHistoryEntry[];
 }
 
@@ -315,6 +320,20 @@ export interface Invoice {
   tds?: number;
   gst?: number;
   workflowStepHistory?: WorkflowStepHistoryEntry[];
+  /** Set after POST .../invoices/:id/sync-oracle (mock or real ERP). */
+  oracleInvoiceId?: string;
+  oracleSyncStatus?: string;
+  oracleSyncResponse?: Record<string, unknown>;
+  oracleTaxResponse?: Record<string, unknown>;
+  oracleSyncError?: Record<string, unknown>;
+  /** Oracle Fusion InvoiceCurrency (e.g. INR). */
+  invoiceCurrency?: string;
+  invoiceGroup?: string;
+  /** Set on final approval; GL accounting date. */
+  accountingDate?: string;
+  invoiceSource?: string;
+  /** Standard | Prepayment | Debit memo */
+  invoiceType?: string;
 }
 
 // Workflow specific types

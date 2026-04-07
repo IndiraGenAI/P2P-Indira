@@ -6,7 +6,7 @@ export const ENTITIES = ['Alpha Corp', 'Beta Logistics', 'Gamma Industries', 'De
 export const MASTER_GROUPS: { label: string; types: MasterType[] }[] = [
   { label: 'Purchasing', types: ['Vendor', 'Vendor Site', 'Vendor Category', 'Applicant Type', 'Item', 'Item Type', 'Item Category', 'UOM', 'Payment Terms'] },
   { label: 'Organization', types: ['Department', 'Subdepartment', 'Cost Center', 'Entity', 'Center'] },
-  { label: 'Finance & Tax', types: ['COA', 'TDS', 'GST', 'Voucher'] },
+  { label: 'Finance & Tax', types: ['COA', 'TDS', 'GST', 'Voucher', 'Currency', 'Invoice Source'] },
   { label: 'Geography', types: ['Country', 'Zone', 'State', 'City'] },
 ];
 export const ALL_MASTER_TYPES = MASTER_GROUPS.flatMap((g) => g.types);

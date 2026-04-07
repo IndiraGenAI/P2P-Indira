@@ -165,24 +165,55 @@ export function VendorApprovalViewModal({
         <Ro label="Vendor type (MSME)">{String(r.vendorType ?? '')}</Ro>
         <Ro label="MSME reg no.">{String(r.msmeRegNo ?? '')}</Ro>
       </div>
+      <div className="grid grid-cols-2 gap-4">
+        <Ro label="Contact first name">{String(r.contactFirstName ?? '')}</Ro>
+        <Ro label="Contact last name">{String(r.contactLastName ?? '')}</Ro>
+      </div>
+      <Ro label="Country">{String(r.countryCode ?? '')}</Ro>
+      <Ro label="Payment currency">{String(r.paymentCurrencyCode ?? '')}</Ro>
       <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b pb-1 pt-2">Bank</h4>
       <Ro label="Account number">{String(r.accNo ?? '')}</Ro>
       <div className="grid grid-cols-2 gap-4">
         <Ro label="Bank name">{String(r.bankName ?? '')}</Ro>
-        <Ro label="IFSC">{String(r.ifsc ?? '')}</Ro>
+        <Ro label="Branch name">{String(r.bankBranchName ?? '')}</Ro>
       </div>
+      <Ro label="IFSC">{String(r.ifsc ?? '')}</Ro>
       <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b pb-1 pt-2">Tax & category</h4>
       <div className="grid grid-cols-2 gap-4">
         <Ro label="TDS">{tds ? `${(tds as any).name} (${(tds as any).rate}%)` : ''}</Ro>
         <Ro label="Payment terms">{pay ? (pay as any).name : ''}</Ro>
       </div>
-      <Ro label="Entity mapping">{entities.length ? entities.join(', ') : '—'}</Ro>
+      <Ro label="Entity mapping">{entities.length ? entities.map((eid: string) => {
+        const ent = (masters['Entity'] || []).find((e: any) => e.id === eid);
+        return ent ? ent.name : eid;
+      }).join(', ') : '—'}</Ro>
       <div className="grid grid-cols-2 gap-4">
         <Ro label="Resident status">{String(r.residency ?? '')}</Ro>
         <Ro label="Applicant type">{appType ? (appType as any).name : ''}</Ro>
       </div>
       <Ro label="Vendor category">{vcat ? (vcat as any).name : ''}</Ro>
       <Ro label="Operational status">{String(r.status ?? 'Active')}</Ro>
+      {(r.fusionSupplierId || r.fusionOnboardingStatus) && (
+        <>
+          <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b pb-1 pt-2">Oracle Fusion Onboarding</h4>
+          <Ro label="Onboarding status">{String(r.fusionOnboardingStatus ?? '—')}</Ro>
+          <div className="grid grid-cols-2 gap-4">
+            <Ro label="Supplier ID">{String(r.fusionSupplierId ?? '—')}</Ro>
+            <Ro label="Party ID">{String(r.fusionSupplierPartyId ?? '—')}</Ro>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <Ro label="Site ID">{String(r.fusionSupplierSiteId ?? '—')}</Ro>
+            <Ro label="Bank Account ID">{String(r.fusionBankAccountId ?? '—')}</Ro>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <Ro label="EXT Payee ID">{String(r.fusionExtPayeeId ?? '—')}</Ro>
+            <Ro label="Onboarded at">{String(r.fusionOnboardedAt ?? '—')}</Ro>
+          </div>
+          {r.fusionOnboardingError && (
+            <Ro label="Last error">{String(r.fusionOnboardingError)}</Ro>
+          )}
+        </>
+      )}
     </ModalShell>
   );
 }

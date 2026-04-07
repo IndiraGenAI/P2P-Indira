@@ -7,7 +7,7 @@ const SUBMIT_APPROVAL_DELAY_SEC = 4;
 import { COA_CATEGORIES, GST_TYPES, TRANSACTION_TYPES, CENTERS, ENTITIES, MASTER_GROUPS } from '../constants';
 import { getAllSubdepartments } from '../utils/mastersHelpers';
 import MultiSelect from './MultiSelect';
-import { apiPatch } from '../api';
+import { apiPatch, apiPost } from '../api';
 
 interface MastersManagementProps {
   masters: Record<MasterType, MasterRecord[]>;
@@ -31,6 +31,7 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
   const [masterWorkflowSubmitting, setMasterWorkflowSubmitting] = useState<Record<string, boolean>>({});
   const [nowTick, setNowTick] = useState(() => Date.now());
   const autoSubmitTimeoutsRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const [onboardingVendorId, setOnboardingVendorId] = useState<string | null>(null);
 
   useEffect(() => {
     const t = setInterval(() => setNowTick(Date.now()), 1000);
@@ -221,15 +222,19 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
                 <input value={formData.address3 || ''} onChange={e => setFormData({...formData, address3: e.target.value})} className={inputClass} placeholder="Address Line 3" />
               </div>
               <div className="grid grid-cols-3 gap-4">
-                <select value={formData.stateId || ''} onChange={e => setFormData({...formData, stateId: e.target.value})} className={inputClass}>
-                  <option value="">Select State...</option>
-                  {(masters['State'] || []).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                <input value={formData.state || ''} onChange={e => setFormData({...formData, state: e.target.value})} className={inputClass} placeholder="State code (e.g. MH)" />
+                <input value={formData.city || ''} onChange={e => setFormData({...formData, city: e.target.value})} className={inputClass} placeholder="City (e.g. Mumbai)" />
+                <input value={formData.pincode || ''} onChange={e => setFormData({...formData, pincode: e.target.value})} className={inputClass} placeholder="Pincode (e.g. 400001)" />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <select value={formData.countryCode || ''} onChange={e => setFormData({...formData, countryCode: e.target.value})} className={inputClass}>
+                  <option value="">Select Country...</option>
+                  {(masters['Country'] || []).filter((c: any) => c.status === 'Active').map((c: any) => <option key={c.id} value={c.countryCode || c.code || ''}>{c.name} ({c.countryCode || c.code || '—'})</option>)}
                 </select>
-                <select value={formData.cityId || ''} onChange={e => setFormData({...formData, cityId: e.target.value})} className={inputClass}>
-                  <option value="">Select City...</option>
-                  {(masters['City'] || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                <select value={formData.paymentCurrencyCode || ''} onChange={e => setFormData({...formData, paymentCurrencyCode: e.target.value})} className={inputClass}>
+                  <option value="">Payment Currency...</option>
+                  {(masters['Currency'] || []).filter((c: any) => c.status === 'Active').map((c: any) => <option key={c.id} value={c.code || c.name}>{c.name} ({c.code || ''})</option>)}
                 </select>
-                <input value={formData.pincode || ''} onChange={e => setFormData({...formData, pincode: e.target.value})} className={inputClass} placeholder="Pincode" />
               </div>
               <MultiSelect 
                 label="Assigned Site(s) / Centers"
@@ -243,12 +248,25 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
             <div className="space-y-4">
               <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b pb-1">Contact & Compliance</h4>
               <div className="grid grid-cols-2 gap-4">
+                <input value={formData.contactFirstName || ''} onChange={e => setFormData({...formData, contactFirstName: e.target.value})} className={inputClass} placeholder="Contact First Name" />
+                <input value={formData.contactLastName || ''} onChange={e => setFormData({...formData, contactLastName: e.target.value})} className={inputClass} placeholder="Contact Last Name" />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
                 <input value={formData.phone || ''} onChange={e => setFormData({...formData, phone: e.target.value})} className={inputClass} placeholder="Phone Number" />
                 <input value={formData.email || ''} onChange={e => setFormData({...formData, email: e.target.value})} className={inputClass} placeholder="Email ID" />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <input value={formData.pan || ''} onChange={e => setFormData({...formData, pan: e.target.value})} className={inputClass} placeholder="PAN Number" />
                 <input value={formData.gst || ''} onChange={e => setFormData({...formData, gst: e.target.value})} className={inputClass} placeholder="GST Number" />
+              </div>
+              <div className="space-y-1">
+                <label className={labelClass}>Taxpayer Country Code (for Oracle Fusion)</label>
+                <select value={formData.taxpayerCountryCode || ''} onChange={e => setFormData({...formData, taxpayerCountryCode: e.target.value})} className={inputClass}>
+                  <option value="">Select Country Code...</option>
+                  {(masters['Country'] || []).filter((c: any) => c.status === 'Active').map((c: any) => (
+                    <option key={c.id} value={c.countryCode || c.code || ''}>{c.name} ({c.countryCode || c.code || '—'})</option>
+                  ))}
+                </select>
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-1">
@@ -282,8 +300,10 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
                 <input value={formData.accNo || ''} onChange={e => setFormData({...formData, accNo: e.target.value})} className={inputClass} placeholder="Account Number" />
                 <div className="grid grid-cols-2 gap-4">
                   <input value={formData.bankName || ''} onChange={e => setFormData({...formData, bankName: e.target.value})} className={inputClass} placeholder="Bank Name" />
-                  <input value={formData.ifsc || ''} onChange={e => setFormData({...formData, ifsc: e.target.value})} className={inputClass} placeholder="IFSC Code" />
+                  <input value={formData.bankBranchName || ''} onChange={e => setFormData({...formData, bankBranchName: e.target.value})} className={inputClass} placeholder="Branch Name" />
                 </div>
+                <input value={formData.ifsc || ''} onChange={e => setFormData({...formData, ifsc: e.target.value})} className={inputClass} placeholder="IFSC Code" />
+                <p className="text-[10px] text-blue-500 italic">Oracle bank/branch is auto-resolved from IFSC during onboarding. If the IFSC doesn't exist in Oracle, the bank and branch will be auto-created.</p>
               </div>
             </div>
 
@@ -301,9 +321,15 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
               </div>
               <MultiSelect 
                 label="Entity Mapping"
-                options={ENTITIES}
-                selected={formData.entityIds || []}
-                onChange={val => setFormData({...formData, entityIds: val})}
+                options={(masters['Entity'] || []).filter((e: any) => e.status === 'Active').map((e: any) => e.name)}
+                selected={(formData.entityIds || []).map((eid: string) => {
+                  const ent = (masters['Entity'] || []).find((e: any) => e.id === eid);
+                  return ent ? ent.name : eid;
+                })}
+                onChange={names => setFormData({...formData, entityIds: names.map(n => {
+                  const ent = (masters['Entity'] || []).find((e: any) => e.name === n);
+                  return ent ? ent.id : n;
+                })})}
                 placeholder="Multiple entities allowed..."
               />
               <div className="grid grid-cols-2 gap-4">
@@ -322,6 +348,111 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
                 {(masters['Vendor Category'] || []).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
+
+            <div className="space-y-4 pt-4 border-t border-slate-100">
+              <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b pb-1">Oracle Fusion (supplier)</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className={labelClass}>Supplier number (Oracle)</label>
+                  <input value={formData.oracleSupplierNumber || ''} onChange={e => setFormData({ ...formData, oracleSupplierNumber: e.target.value })} className={inputClass} placeholder="Fusion supplier number" />
+                </div>
+                <div className="space-y-1">
+                  <label className={labelClass}>Supplier name (Oracle)</label>
+                  <input value={formData.oracleSupplierName || ''} onChange={e => setFormData({ ...formData, oracleSupplierName: e.target.value })} className={inputClass} placeholder="As registered in Fusion" />
+                </div>
+              </div>
+            </div>
+
+            {editingRecord && (
+              <div className="space-y-4 pt-4 border-t border-slate-100">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b pb-1">Fusion Onboarding</h4>
+                  {formData.fusionOnboardingStatus === 'COMPLETE' ? (
+                    <span className="text-[9px] font-black uppercase px-3 py-1 bg-emerald-100 text-emerald-700 rounded-lg">FUSION ✓</span>
+                  ) : formData.fusionOnboardingStatus === 'FAILED' ? (
+                    <span className="text-[9px] font-black uppercase px-3 py-1 bg-rose-100 text-rose-600 rounded-lg">Failed at: {formData.fusionOnboardingCompletedStep || '?'}</span>
+                  ) : formData.fusionOnboardingStatus === 'COMPLETE_PARTIAL' ? (
+                    <span className="text-[9px] font-black uppercase px-3 py-1 bg-amber-100 text-amber-700 rounded-lg">Partial</span>
+                  ) : (
+                    <span className="text-[9px] font-black uppercase px-3 py-1 bg-slate-100 text-slate-500 rounded-lg">Not onboarded</span>
+                  )}
+                </div>
+                {formData.fusionSupplierId && (
+                  <div className="grid grid-cols-2 gap-2 text-[10px] bg-slate-50 p-3 rounded-xl border border-slate-200">
+                    <div><span className="font-bold text-slate-400">Supplier ID:</span> <span className="font-mono text-slate-600">{formData.fusionSupplierId}</span></div>
+                    <div><span className="font-bold text-slate-400">Party ID:</span> <span className="font-mono text-slate-600">{formData.fusionSupplierPartyId}</span></div>
+                    <div><span className="font-bold text-slate-400">Address ID:</span> <span className="font-mono text-slate-600">{formData.fusionSupplierAddressId || '—'}</span></div>
+                    <div><span className="font-bold text-slate-400">Contact ID:</span> <span className="font-mono text-slate-600">{formData.fusionSupplierContactId || '—'}</span></div>
+                    <div><span className="font-bold text-slate-400">Site ID:</span> <span className="font-mono text-slate-600">{formData.fusionSupplierSiteId || '—'}</span></div>
+                    <div><span className="font-bold text-slate-400">Assignment ID:</span> <span className="font-mono text-slate-600">{formData.fusionSiteAssignmentId || '—'}</span></div>
+                    <div><span className="font-bold text-slate-400">Bank Account ID:</span> <span className="font-mono text-slate-600">{formData.fusionBankAccountId || '—'}</span></div>
+                    <div><span className="font-bold text-slate-400">EXT Payee ID:</span> <span className="font-mono text-slate-600">{formData.fusionExtPayeeId || '—'}</span></div>
+                  </div>
+                )}
+                {formData.fusionOnboardingError && (
+                  <p className="text-[10px] text-rose-500 font-semibold bg-rose-50 p-2 rounded-lg">{formData.fusionOnboardingError}</p>
+                )}
+                {!formData.fusionOnboardingStatus || formData.fusionOnboardingStatus === 'NOT_STARTED' ? (
+                  <p className="text-[10px] text-blue-600 font-semibold bg-blue-50 p-2 rounded-lg">
+                    Vendor will be auto-onboarded to Oracle Fusion after final workflow approval.
+                  </p>
+                ) : (formData.fusionOnboardingStatus === 'FAILED' || formData.fusionOnboardingStatus === 'COMPLETE_PARTIAL') ? (
+                  <button
+                    type="button"
+                    disabled={onboardingVendorId === editingRecord.id}
+                    onClick={async () => {
+                      if (!confirm(`Re-onboard "${editingRecord.name}" to Oracle Fusion?`)) return;
+                      setOnboardingVendorId(editingRecord.id);
+                      try {
+                        const updatedRecords = currentRecords.map(r => r.id === editingRecord.id ? { ...r, ...formData } : r);
+                        onUpdate(activeSubTab, updatedRecords);
+                        await apiPost('masters', { [activeSubTab]: updatedRecords });
+                        await new Promise(resolve => setTimeout(resolve, 500));
+                        const result: any = await apiPost('vendors/onboard', { vendorMasterId: editingRecord.id });
+                        if (result.success) {
+                          alert('Supplier onboarded successfully!');
+                          if (result.data) {
+                            setFormData((prev: any) => ({
+                              ...prev,
+                              fusionSupplierId: result.data.supplierId,
+                              fusionSupplierPartyId: result.data.supplierPartyId,
+                              fusionSupplierAddressId: result.data.supplierAddressId,
+                              fusionSupplierContactId: result.data.supplierContactId,
+                              fusionSupplierSiteId: result.data.supplierSiteId,
+                              fusionSiteAssignmentId: result.data.assignmentId,
+                              fusionBankAccountId: result.data.bankAccountId,
+                              fusionExtPayeeId: result.data.extPayeeId,
+                              fusionOnboardingStatus: 'COMPLETE',
+                              fusionOnboardingError: null,
+                            }));
+                          }
+                        } else {
+                          alert(`Onboarding failed at step: ${result.completedStep || 'init'}.\n${result.message}`);
+                          setFormData((prev: any) => ({
+                            ...prev,
+                            fusionOnboardingStatus: 'FAILED',
+                            fusionOnboardingCompletedStep: result.completedStep,
+                            fusionOnboardingError: result.message,
+                          }));
+                        }
+                        if (refetchMasters) await refetchMasters();
+                      } catch (e) {
+                        alert(`Onboarding error: ${(e as Error).message}`);
+                      } finally {
+                        setOnboardingVendorId(null);
+                      }
+                    }}
+                    className={`w-full py-3 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${
+                      onboardingVendorId === editingRecord.id
+                        ? 'bg-amber-100 text-amber-700 cursor-wait'
+                        : 'bg-orange-600 text-white hover:bg-orange-700 shadow-lg shadow-orange-100'
+                    }`}
+                  >
+                    {onboardingVendorId === editingRecord.id ? 'Re-onboarding...' : 'Re-onboard to Oracle Fusion'}
+                  </button>
+                ) : null}
+              </div>
+            )}
             
             <div className="space-y-4 pt-4 border-t border-slate-100">
               <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b pb-1">Governance & Status</h4>
@@ -371,6 +502,17 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
                 <input value={formData.contactEmail || ''} onChange={e => setFormData({...formData, contactEmail: e.target.value})} className={inputClass} placeholder="Contact Email" />
               </div>
             </div>
+            <div className="space-y-4 pt-4 border-t border-slate-100">
+              <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b pb-1">Oracle Fusion (site)</h4>
+              <div className="space-y-1">
+                <label className={labelClass}>Supplier site name (Oracle)</label>
+                <input value={formData.oracleSupplierSiteName || ''} onChange={e => setFormData({ ...formData, oracleSupplierSiteName: e.target.value })} className={inputClass} placeholder="Fusion supplier site" />
+              </div>
+              <div className="space-y-1">
+                <label className={labelClass}>Fusion Address Name</label>
+                <input value={formData.fusionAddressName || ''} onChange={e => setFormData({ ...formData, fusionAddressName: e.target.value })} className={inputClass} placeholder="Oracle address label (optional)" />
+              </div>
+            </div>
             {commonStatus}
           </div>
         );
@@ -381,6 +523,25 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
             <div className="grid grid-cols-2 gap-4">
               {commonCode("Entity Code")}
               {commonName("Entity Name")}
+            </div>
+            <div className="space-y-4">
+              <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b pb-1">Oracle Fusion</h4>
+              <div className="space-y-1">
+                <label className={labelClass}>Business Unit (Oracle)</label>
+                <input value={formData.oracleBusinessUnit || ''} onChange={e => setFormData({ ...formData, oracleBusinessUnit: e.target.value })} className={inputClass} placeholder="Fusion BU name or identifier" />
+              </div>
+              <div className="space-y-1">
+                <label className={labelClass}>Legal Entity (Oracle)</label>
+                <input value={formData.oracleLegalEntity || ''} onChange={e => setFormData({ ...formData, oracleLegalEntity: e.target.value })} className={inputClass} placeholder="e.g. Indira IVF Hospital Private Limited" />
+              </div>
+              <div className="space-y-1">
+                <label className={labelClass}>Liability Distribution (Oracle)</label>
+                <input value={formData.oracleLiabilityDistribution || ''} onChange={e => setFormData({ ...formData, oracleLiabilityDistribution: e.target.value })} className={inputClass} placeholder="e.g. 1001.21007.999.999.9999.1001.9999.9999.9999" />
+              </div>
+              <div className="space-y-1">
+                <label className={labelClass}>Prepayment Distribution (Oracle)</label>
+                <input value={formData.oraclePrepaymentDistribution || ''} onChange={e => setFormData({ ...formData, oraclePrepaymentDistribution: e.target.value })} className={inputClass} placeholder="e.g. 1001.12508.999.999.9999.1001.9999.9999.9999" />
+              </div>
             </div>
             
             <div className="space-y-4">
@@ -496,6 +657,10 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
             </div>
             {commonCode("GL Code")}
             {commonName("GL Name")}
+            <div className="space-y-1">
+              <label className={labelClass}>Distribution combination (Oracle)</label>
+              <input value={formData.oracleDistributionCombination || ''} onChange={e => setFormData({ ...formData, oracleDistributionCombination: e.target.value })} className={inputClass} placeholder="Fusion account combination" />
+            </div>
             {commonStatus}
           </div>
         );
@@ -608,6 +773,16 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
           </div>
         );
 
+      case 'Currency':
+      case 'Invoice Source':
+        return (
+          <div className="space-y-4">
+            {commonCode(`${activeSubTab} Code`)}
+            {commonName(`${activeSubTab} Name`)}
+            {commonStatus}
+          </div>
+        );
+
       case 'Subdepartment':
         return (
           <div className="space-y-4">
@@ -648,6 +823,32 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
           </div>
         );
       }
+
+      case 'Country':
+        return (
+          <div className="space-y-4">
+            {commonCode('Country Code (ISO)')}
+            {commonName('Country Name')}
+            <div className="space-y-1">
+              <label className={labelClass}>ISO Country Code (e.g. IN, US, GB)</label>
+              <input value={formData.countryCode || ''} onChange={e => setFormData({...formData, countryCode: e.target.value.toUpperCase()})} className={inputClass} placeholder="2-letter ISO code" maxLength={2} />
+            </div>
+            {commonStatus}
+          </div>
+        );
+
+      case 'Payment Terms':
+        return (
+          <div className="space-y-4">
+            {commonCode('Payment Term Code')}
+            {commonName('Payment Term Name')}
+            <div className="space-y-1">
+              <label className={labelClass}>Oracle Fusion Payment Term</label>
+              <input value={formData.oraclePaymentTerms || ''} onChange={e => setFormData({...formData, oraclePaymentTerms: e.target.value})} className={inputClass} placeholder="Fusion lookup code (e.g. Immediate, Net 30)" />
+            </div>
+            {commonStatus}
+          </div>
+        );
 
       default:
         return (
@@ -742,6 +943,8 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
                       integrationInfo = `${record.itemType || 'No Type'} | ${coa ? (coa.category || coa.name) : 'No COA'} | ${cat ? cat.name : 'No Cat'} | ${uom ? uom.name : 'No UOM'}`;
                     } else if (activeSubTab === 'TDS' || activeSubTab === 'GST') {
                       integrationInfo = `${record.code} | Rate: ${record.rate}%`;
+                    } else if (activeSubTab === 'Currency' || activeSubTab === 'Invoice Source') {
+                      integrationInfo = record.code ? `${record.code} | ${record.name}` : (record.name || '—');
                     } else if (activeSubTab === 'Department') {
                       const subIds = (record as any).subdepartmentIds || [];
                       const subNames = subIds.map((id: string) => (masters['Subdepartment'] || []).find((s) => s.id === id)?.name).filter(Boolean);
@@ -756,6 +959,19 @@ const MastersManagement: React.FC<MastersManagementProps> = ({ masters, onUpdate
                         </td>
                         <td className="px-6 py-5">
                           <span className="text-[11px] font-bold text-slate-600 bg-slate-100 px-3 py-1 rounded-lg border border-slate-200">{integrationInfo}</span>
+                          {activeSubTab === 'Vendor' && (
+                            <span className={`ml-2 text-[9px] font-black uppercase px-2 py-0.5 rounded-md ${
+                              (record as any).fusionOnboardingStatus === 'COMPLETE' ? 'bg-emerald-100 text-emerald-700' :
+                              (record as any).fusionOnboardingStatus === 'COMPLETE_PARTIAL' ? 'bg-amber-100 text-amber-700' :
+                              (record as any).fusionOnboardingStatus === 'FAILED' ? 'bg-rose-100 text-rose-600' :
+                              'bg-slate-50 text-slate-400 border border-slate-200'
+                            }`}>
+                              {(record as any).fusionOnboardingStatus === 'COMPLETE' ? 'FUSION ✓' :
+                               (record as any).fusionOnboardingStatus === 'COMPLETE_PARTIAL' ? 'FUSION ~' :
+                               (record as any).fusionOnboardingStatus === 'FAILED' ? 'FUSION ✗' :
+                               'Not onboarded'}
+                            </span>
+                          )}
                         </td>
                         <td className="px-6 py-5 text-center">
                           {canEdit ? (
