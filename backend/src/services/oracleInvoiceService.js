@@ -303,6 +303,9 @@ export function mapInvoiceRowToOraclePayload(invoice, _supplierDisplayName, opts
   const paymentTerms = opts.paymentTerms || invoice.paymentTerms || 'Immediate';
   const paymentMethod = invoice.paymentMethod || 'Electronic';
 
+  const typeRaw = String(invoice.invoiceType || 'Standard').trim();
+  const isPrepayment = typeRaw.toLowerCase() === 'prepayment';
+
   const payload = {
     InvoiceNumber: invoice.invoiceNumber || invoice.id,
     InvoiceCurrency: currency,
@@ -319,7 +322,8 @@ export function mapInvoiceRowToOraclePayload(invoice, _supplierDisplayName, opts
     AccountingDate: accountingDate,
     Description: invoice.overallSummary || invoice.remarks || '',
     InvoiceSource: invoice.invoiceSource || 'P2P',
-    InvoiceType: invoice.invoiceType || 'Standard',
+    InvoiceType: isPrepayment ? 'Prepayment' : typeRaw || 'Standard',
+    ...(isPrepayment ? { InvoiceTypeMeaning: 'Prepayment' } : {}),
     invoiceLines,
   };
 

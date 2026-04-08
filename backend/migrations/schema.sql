@@ -137,6 +137,8 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
   billing_address_id VARCHAR(64),
   is_advance_po BOOLEAN,
   advance_percentage NUMERIC(5,2),
+  advance_amount NUMERIC(18,2),
+  expected_invoice_type VARCHAR(50),
   currency_code VARCHAR(8) NOT NULL DEFAULT 'INR'
 );
 

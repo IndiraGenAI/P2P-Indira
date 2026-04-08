@@ -63,6 +63,13 @@ type PoRemainingItem = {
   center: string;
 };
 
+/** New GRN-linked invoice default: Prepayment only when PO is Advance PO with a positive advance %. */
+function invoiceTypeDefaultFromPo(po: PurchaseOrder | null | undefined): 'Standard' | 'Prepayment' {
+  const pct = Number(po?.advancePercentage);
+  if (po?.isAdvancePO && Number.isFinite(pct) && pct > 0) return 'Prepayment';
+  return 'Standard';
+}
+
 const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({ 
   masters, purchaseOrders, setPurchaseOrders, grns, setGrns, invoices, setInvoices, pendingPR, onPOCreated, currentUser, workflows, budgets, setBudgets, workflowV2Rules = [],
   moduleEntryIntent = null,
@@ -265,6 +272,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     billingAddressId: '',
     isUnbudgeted: false,
     unbudgetedJustification: '',
+    isAdvancePO: false,
     currencyCode: (masters['Currency']?.[0]?.name as string | undefined) || 'INR',
   });
 
@@ -300,6 +308,10 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
         isUnbudgeted: pendingPR.isUnbudgeted,
         unbudgetedJustification: pendingPR.unbudgetedJustification,
         currencyCode: (pendingPR as Partial<PurchaseOrder>).currencyCode || (masters['Currency']?.[0]?.name as string | undefined) || 'INR',
+        isAdvancePO: false,
+        advancePercentage: undefined,
+        advanceAmount: undefined,
+        expectedInvoiceType: undefined,
       });
     }
   }, [pendingPR]);
@@ -573,6 +585,24 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     invoiceType: 'Standard',
   });
 
+  // New invoice draft: sync type with PO (Standard unless Advance PO with advance %).
+  useEffect(() => {
+    if (viewMode !== 'Invoice' || !showForm || !selectedGRN || !selectedPO) return;
+    const id = invoiceForm.id;
+    if (id && invoices.some((i) => i.id === id)) return;
+    const next = invoiceTypeDefaultFromPo(selectedPO);
+    setInvoiceForm((prev) => (prev.invoiceType === next ? prev : { ...prev, invoiceType: next }));
+  }, [
+    viewMode,
+    showForm,
+    selectedGRN?.id,
+    selectedPO?.id,
+    selectedPO?.isAdvancePO,
+    selectedPO?.advancePercentage,
+    invoiceForm.id,
+    invoices,
+  ]);
+
   // Update total amount whenever items change
   useEffect(() => {
     const total = (poForm.items || []).reduce((sum, item) => sum + (item.totalAmount || 0), 0);
@@ -745,6 +775,12 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       ...i,
       gst: i.gst !== undefined && i.gst !== null ? i.gst : headerGstNum,
     }));
+    const poAmountTotal = itemsForSave.reduce((sum, i) => sum + (Number(i.totalAmount) || Number(i.amount) || 0), 0);
+    const advPct = poForm.isAdvancePO ? Number(poForm.advancePercentage) : 0;
+    const advanceAmount =
+      poForm.isAdvancePO && Number.isFinite(advPct) && advPct > 0
+        ? Math.round((poAmountTotal * advPct) / 100 * 100) / 100
+        : undefined;
     const newPO: PurchaseOrder = {
       ...(poForm as PurchaseOrder),
       items: itemsForSave,
@@ -754,8 +790,19 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       currentStepIndex: 0,
       createdAt: new Date().toISOString(),
       attachments: poForm.attachments || [],
-      workflowStepHistory: [{ action: 'submit', userId: currentUser.id, at: new Date().toISOString(), stepIndex: 0 }]
+      workflowStepHistory: [{ action: 'submit', userId: currentUser.id, at: new Date().toISOString(), stepIndex: 0 }],
+      amount: poAmountTotal,
+      isAdvancePO: !!poForm.isAdvancePO,
+      advancePercentage: poForm.isAdvancePO && advPct > 0 ? advPct : undefined,
+      advanceAmount: poForm.isAdvancePO && advPct > 0 ? advanceAmount : undefined,
+      expectedInvoiceType: poForm.isAdvancePO && advPct > 0 ? 'PREPAYMENT' : undefined,
     };
+    if (!poForm.isAdvancePO) {
+      newPO.isAdvancePO = false;
+      newPO.advancePercentage = undefined;
+      newPO.advanceAmount = undefined;
+      newPO.expectedInvoiceType = undefined;
+    }
     setPurchaseOrders([...purchaseOrders, newPO]);
     setShowForm(false);
     resetForms();
@@ -955,6 +1002,11 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       (masters['Invoice Source']?.find((s) => s.name === 'P2P')?.name as string | undefined) ||
       (masters['Invoice Source']?.[0]?.name as string | undefined) ||
       'P2P';
+
+    const trimmedType = String(invoiceForm.invoiceType ?? '').trim();
+    const invoiceTypeResolved =
+      trimmedType || invoiceTypeDefaultFromPo(poForInv || null);
+
     const newInvoice: Invoice = {
       ...invoiceForm as Invoice,
       id: `INV-${Math.floor(Math.random() * 10000)}`,
@@ -969,7 +1021,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       invoiceCurrency: invoiceForm.invoiceCurrency || poForInv?.currencyCode || defaultCur,
       invoiceGroup: invoiceForm.invoiceGroup,
       invoiceSource: invoiceForm.invoiceSource || defaultSrc,
-      invoiceType: invoiceForm.invoiceType || (poForInv?.isAdvancePO ? 'Prepayment' : 'Standard'),
+      invoiceType: invoiceTypeResolved,
     };
     setInvoices([...invoices, newInvoice]);
     setShowForm(false);
@@ -985,6 +1037,10 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       tds: 0, gst: 0, amount: 0, remarks: '', overallSummary: '', attachments: [],
       shippingAddressId: '', billingAddressId: '',
       isUnbudgeted: false, unbudgetedJustification: '',
+      isAdvancePO: false,
+      advancePercentage: undefined,
+      advanceAmount: undefined,
+      expectedInvoiceType: undefined,
       currencyCode: (masters['Currency']?.[0]?.name as string | undefined) || 'INR',
     });
     setGrnForm({ vendorSiteId: '', location: '', invoiceNumber: '', invoiceDate: '', department: '', subDepartment: '', tds: 0, gst: 0, items: [], amount: 0, remarks: '', overallSummary: '', attachments: [], shippingAddressId: '', billingAddressId: '' });
@@ -1728,7 +1784,20 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                       id="isAdvancePO"
                       className="w-5 h-5 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500"
                       checked={poForm.isAdvancePO || false}
-                      onChange={e => setPoForm({ ...poForm, isAdvancePO: e.target.checked })}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setPoForm({
+                          ...poForm,
+                          isAdvancePO: checked,
+                          ...(checked
+                            ? {}
+                            : {
+                                advancePercentage: undefined,
+                                advanceAmount: undefined,
+                                expectedInvoiceType: undefined,
+                              }),
+                        });
+                      }}
                     />
                     <label htmlFor="isAdvancePO" className="text-sm font-black text-slate-700 uppercase tracking-wider cursor-pointer">Advance PO</label>
                   </div>
@@ -1737,11 +1806,24 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                       <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Advance Percentage (%)</label>
                       <input 
                         type="number" 
+                        min={0.01}
+                        max={100}
+                        step={0.01}
                         className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 focus:ring-2 focus:ring-indigo-500 outline-none font-medium"
                         placeholder="e.g. 10"
-                        value={poForm.advancePercentage || ''}
+                        value={poForm.advancePercentage === undefined || poForm.advancePercentage === null ? '' : poForm.advancePercentage}
                         onChange={e => setPoForm({ ...poForm, advancePercentage: Number(e.target.value) })}
                       />
+                      {Number(poForm.advancePercentage) > 0 && (
+                        <p className="text-xs font-bold text-slate-600">
+                          Advance amount (calculated): ₹
+                          {(
+                            ((Number(poForm.amount) || 0) * (Number(poForm.advancePercentage) || 0)) /
+                              100
+                          ).toFixed(2)}{' '}
+                          <span className="text-slate-400 font-medium">— first GRN invoices use Prepayment until this cap is reached</span>
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>
@@ -2344,16 +2426,38 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                     </div>
                     <div className="space-y-2">
                       <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Invoice type</label>
-                      <select
-                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-60"
-                        value={invoiceForm.invoiceType || 'Standard'}
-                        onChange={(e) => setInvoiceForm({ ...invoiceForm, invoiceType: e.target.value })}
-                        disabled={invoiceForm.status === 'Approved'}
-                      >
-                        <option value="Standard">Standard</option>
-                        <option value="Prepayment">Prepayment</option>
-                        <option value="Debit memo">Debit memo</option>
-                      </select>
+                      <div className="space-y-1">
+                        {(() => {
+                          const it = String(invoiceForm.invoiceType || invoiceTypeDefaultFromPo(selectedPO || null)).trim().toLowerCase();
+                          const isPrep = it === 'prepayment';
+                          const isDebit = it === 'debit memo';
+                          const isDraft = !invoiceForm.id || !invoices.some((i) => i.id === invoiceForm.id);
+                          const pillTitle = isPrep ? 'Prepayment' : isDebit ? 'Debit memo' : 'Standard';
+                          const pillCaption = isDebit
+                            ? 'From saved invoice'
+                            : isPrep
+                              ? 'Advance PO — prepayment invoice'
+                              : selectedPO?.isAdvancePO && Number(selectedPO?.advancePercentage) > 0 && !isDraft
+                                ? 'Standard invoice'
+                                : 'Standard payment';
+                          return (
+                            <>
+                              <span
+                                className={`inline-flex w-fit px-3 py-2 rounded-xl text-xs font-black uppercase tracking-wide ${
+                                  isPrep
+                                    ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+                                    : isDebit
+                                      ? 'bg-amber-100 text-amber-900 border border-amber-200'
+                                      : 'bg-slate-200 text-slate-800 border border-slate-300'
+                                }`}
+                              >
+                                {pillTitle}
+                              </span>
+                              <p className="text-[10px] font-bold text-slate-500 leading-snug">{pillCaption}</p>
+                            </>
+                          );
+                        })()}
+                      </div>
                     </div>
                     {(invoiceForm.accountingDate || invoiceForm.oracleInvoiceId || invoiceForm.oracleSyncStatus) && (
                       <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
@@ -2833,7 +2937,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                                   invoiceCurrency: resolvedPO?.currencyCode || defaultCur,
                                   invoiceGroup: '',
                                   invoiceSource: defaultSrc,
-                                  invoiceType: resolvedPO?.isAdvancePO ? 'Prepayment' : 'Standard',
+                                  invoiceType: invoiceTypeDefaultFromPo(resolvedPO || null),
                                 });
                                 setShowForm(true); 
                               }}

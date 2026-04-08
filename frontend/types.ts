@@ -260,6 +260,10 @@ export interface PurchaseOrder {
   billingAddressId?: string;
   isAdvancePO?: boolean;
   advancePercentage?: number;
+  /** PO amount × advance % / 100 when advance PO. */
+  advanceAmount?: number;
+  /** e.g. PREPAYMENT when advance PO with pct > 0. */
+  expectedInvoiceType?: string;
   /** PO currency; flows to invoice as Oracle InvoiceCurrency. */
   currencyCode?: string;
   workflowStepHistory?: WorkflowStepHistoryEntry[];

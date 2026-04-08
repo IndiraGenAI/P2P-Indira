@@ -1465,7 +1465,7 @@ router.post('/rate-contracts', async (req, res) => {
 });
 
 // --- PURCHASE ORDERS ---
-const PO_COLS = ['id', 'entity_name', 'vendor_id', 'vendor_site_id', 'transaction_type', 'valid_from', 'valid_to', 'frequency', 'department', 'sub_department', 'payment_terms', 'terms_and_conditions_id', 'center_names', 'items', 'tds', 'gst', 'amount', 'remarks', 'overall_summary', 'attachments', 'workflow_step_history', 'status', 'current_step_index', 'is_unbudgeted', 'unbudgeted_justification', 'unbudgeted_attachment_url', 'rejection_remarks', 'created_by', 'created_at', 'required_date', 'shipping_address_id', 'billing_address_id', 'is_advance_po', 'advance_percentage', 'currency_code'];
+const PO_COLS = ['id', 'entity_name', 'vendor_id', 'vendor_site_id', 'transaction_type', 'valid_from', 'valid_to', 'frequency', 'department', 'sub_department', 'payment_terms', 'terms_and_conditions_id', 'center_names', 'items', 'tds', 'gst', 'amount', 'remarks', 'overall_summary', 'attachments', 'workflow_step_history', 'status', 'current_step_index', 'is_unbudgeted', 'unbudgeted_justification', 'unbudgeted_attachment_url', 'rejection_remarks', 'created_by', 'created_at', 'required_date', 'shipping_address_id', 'billing_address_id', 'is_advance_po', 'advance_percentage', 'advance_amount', 'expected_invoice_type', 'currency_code'];
 router.get('/purchase-orders', async (req, res) => {
   try {
     const rows = await getAll('purchase_orders');
@@ -1627,6 +1627,13 @@ router.post('/invoices', async (req, res) => {
           if (r.accountingDate === '') r.accountingDate = null;
           return r;
         })();
+
+    const rowsToNormalize = Array.isArray(body) ? body : [body];
+    for (const r of rowsToNormalize) {
+      const t = String(r.invoiceType ?? r.invoice_type ?? '').trim();
+      if (!t) r.invoiceType = 'Standard';
+    }
+
     await buildUpsert('invoices', 'id', INV_COLS, body);
     const rows = await getAll('invoices');
     for (const row of raw) {
