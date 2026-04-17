@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import Papa from 'papaparse';
 import { 
   RateContract, GRN, Invoice, MasterRecord, MasterType, 
@@ -21,6 +21,14 @@ import MultiSelect from './MultiSelect';
 import TransactionListFilterBar, { ListStatusQuick } from './TransactionListFilterBar';
 import SearchableSelect from './SearchableSelect';
 import DocumentAuditLogModal from './DocumentAuditLogModal';
+import { DocumentViewerModal } from './shared/DocumentViewerModal';
+import { AttachmentEyeButton } from './shared/AttachmentEyeButton';
+import {
+  deleteServerAttachment,
+  isServerStoredAttachment,
+  linkDocumentAttachments,
+  uploadServerAttachment,
+} from '../utils/serverAttachment';
 import { apiDownloadFile } from '../api';
 
 type ViewMode = 'RC' | 'GRN' | 'Invoice';
@@ -151,6 +159,12 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
   const [showAuditModal, setShowAuditModal] = useState(false);
   const [selectedAuditDoc, setSelectedAuditDoc] = useState<RateContract | GRN | Invoice | null>(null);
   const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
+  const rcAttachDraftRef = useRef(`draft-${crypto.randomUUID()}`);
+  const grnAttachDraftRef = useRef(`draft-${crypto.randomUUID()}`);
+  const invAttachDraftRef = useRef(`draft-${crypto.randomUUID()}`);
+  const [viewerAttachment, setViewerAttachment] = useState<Attachment | null>(null);
+  const [attachViewRev, setAttachViewRev] = useState(0);
+  const bumpAttachViewRev = useCallback(() => setAttachViewRev((n) => n + 1), []);
 
   const addAuditEntry = <T extends RateContract | GRN | Invoice>(doc: T, action: string): T => ({
     ...(doc as any),
@@ -525,7 +539,7 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
     e.target.value = '';
   };
 
-  const handleCreateRC = () => {
+  const handleCreateRC = async () => {
     // Validation
     if (!rcForm.vendorId || !rcForm.department || !rcForm.subDepartment) {
       alert('Please fill all mandatory header fields.');
@@ -553,12 +567,19 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
       items: itemsWithLocked,
       workflowStepHistory: [{ action: 'submit', userId: currentUser.id, at: new Date().toISOString(), stepIndex: 0 }]
     };
+    const draft = rcAttachDraftRef.current;
+    try {
+      await linkDocumentAttachments('rate_contracts', draft, newRC.id);
+    } catch (e) {
+      alert((e as Error).message || 'Failed to link uploaded files to this rate contract.');
+    }
+    rcAttachDraftRef.current = `draft-${crypto.randomUUID()}`;
     setRateContracts([...rateContracts, newRC]);
     setShowForm(false);
     resetForms();
   };
 
-  const handleCreateGRN = () => {
+  const handleCreateGRN = async () => {
     if (!selectedRC) return;
     const newGRN: GRN = {
       ...grnForm as GRN,
@@ -572,12 +593,19 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
       attachments: grnForm.attachments || [],
       workflowStepHistory: [{ action: 'submit', userId: currentUser.id, at: new Date().toISOString(), stepIndex: 0 }]
     };
+    const draft = grnAttachDraftRef.current;
+    try {
+      await linkDocumentAttachments('grns', draft, newGRN.id);
+    } catch (e) {
+      alert((e as Error).message || 'Failed to link uploaded files to this GRN.');
+    }
+    grnAttachDraftRef.current = `draft-${crypto.randomUUID()}`;
     setGrns([...grns, newGRN]);
     setShowForm(false);
     resetForms();
   };
 
-  const handleCreateInvoice = () => {
+  const handleCreateInvoice = async () => {
     if (!selectedGRN) return;
     const rcForInv = selectedRC || rateContracts.find((r) => r.id === selectedGRN.rateContractId);
     const defaultCur = (masters['Currency']?.[0]?.name as string | undefined) || 'INR';
@@ -603,12 +631,22 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
       invoiceSource: invoiceForm.invoiceSource || defaultSrc,
       invoiceType: invoiceForm.invoiceType || 'Standard',
     };
+    const draft = invAttachDraftRef.current;
+    try {
+      await linkDocumentAttachments('invoices', draft, newInvoice.id);
+    } catch (e) {
+      alert((e as Error).message || 'Failed to link uploaded files to this invoice.');
+    }
+    invAttachDraftRef.current = `draft-${crypto.randomUUID()}`;
     setInvoices([...invoices, newInvoice]);
     setShowForm(false);
     resetForms();
   };
 
   const resetForms = () => {
+    rcAttachDraftRef.current = `draft-${crypto.randomUUID()}`;
+    grnAttachDraftRef.current = `draft-${crypto.randomUUID()}`;
+    invAttachDraftRef.current = `draft-${crypto.randomUUID()}`;
     setRcForm({
       entityName: masters.Entity?.[0]?.name || '',
       vendorId: '', vendorSiteId: '', transactionType: getItemTypesFromMasters(masters)[0]?.name ?? '', validFrom: getTodayISTDate(), validTo: '', requiredDate: '',
@@ -645,24 +683,112 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
     setSelectedGRN(null);
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, source: Attachment['source']) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, source: Attachment['source']) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const newAttachment: Attachment = {
-      id: `att-${Math.random()}`,
-      name: file.name,
-      url: URL.createObjectURL(file),
-      uploadedAt: new Date().toISOString(),
-      source
-    };
+    let documentTable = 'rate_contracts';
+    let documentId = '';
+    if (source === 'RC') {
+      documentTable = 'rate_contracts';
+      documentId =
+        rcForm.id && String(rcForm.id).trim() !== '' ? String(rcForm.id).trim() : rcAttachDraftRef.current;
+    } else if (source === 'GRN') {
+      documentTable = 'grns';
+      documentId =
+        grnForm.id && String(grnForm.id).trim() !== '' ? String(grnForm.id).trim() : grnAttachDraftRef.current;
+    } else {
+      documentTable = 'invoices';
+      documentId =
+        invoiceForm.id && String(invoiceForm.id).trim() !== ''
+          ? String(invoiceForm.id).trim()
+          : invAttachDraftRef.current;
+    }
 
-    if (source === 'RC') setRcForm(prev => ({ ...prev, attachments: [...(prev.attachments || []), newAttachment] }));
-    if (source === 'GRN') setGrnForm(prev => ({ ...prev, attachments: [...(prev.attachments || []), newAttachment] }));
-    if (source === 'Invoice') setInvoiceForm(prev => ({ ...prev, attachments: [...(prev.attachments || []), newAttachment] }));
-    
-    // Reset input
+    try {
+      const meta = await uploadServerAttachment(documentTable, documentId, file);
+      const newAttachment: Attachment = {
+        id: meta.id,
+        name: meta.name,
+        url: meta.url,
+        uploadedAt: meta.uploadedAt,
+        source,
+      };
+      if (source === 'RC') setRcForm((prev) => ({ ...prev, attachments: [...(prev.attachments || []), newAttachment] }));
+      if (source === 'GRN') setGrnForm((prev) => ({ ...prev, attachments: [...(prev.attachments || []), newAttachment] }));
+      if (source === 'Invoice')
+        setInvoiceForm((prev) => ({ ...prev, attachments: [...(prev.attachments || []), newAttachment] }));
+    } catch (err) {
+      alert((err as Error).message || 'Upload failed');
+    }
+
     e.target.value = '';
+  };
+
+  type RcAttachBucket = 'rc-inherited' | 'grn-inherited' | 'rc-form' | 'grn-form' | 'inv-form';
+
+  const removeRcSupportingAttachment = async (att: Attachment, bucket: RcAttachBucket) => {
+    if (isServerStoredAttachment(att)) {
+      try {
+        await deleteServerAttachment(att.id);
+      } catch (e) {
+        alert((e as Error).message || 'Failed to delete file');
+        return;
+      }
+    }
+    const filter = (xs: Attachment[] | undefined) => (xs ?? []).filter((a) => a.id !== att.id);
+    setViewerAttachment((v) => (v?.id === att.id ? null : v));
+    bumpAttachViewRev();
+
+    if (bucket === 'rc-inherited' && selectedRC) {
+      const rid = selectedRC.id;
+      setRateContracts((prev) =>
+        prev.map((rc) => (rc.id !== rid ? rc : { ...rc, attachments: filter(rc.attachments) }))
+      );
+      setSelectedRC((prev) =>
+        prev && prev.id === rid ? { ...prev, attachments: filter(prev.attachments) } : prev
+      );
+      return;
+    }
+    if (bucket === 'grn-inherited' && selectedGRN) {
+      const gid = selectedGRN.id;
+      setGrns((prev) =>
+        prev.map((grn) => (grn.id !== gid ? grn : { ...grn, attachments: filter(grn.attachments) }))
+      );
+      setSelectedGRN((prev) =>
+        prev && prev.id === gid ? { ...prev, attachments: filter(prev.attachments) } : prev
+      );
+      return;
+    }
+    if (bucket === 'rc-form') {
+      const rid = rcForm.id;
+      setRcForm((prev) => ({ ...prev, attachments: filter(prev.attachments) }));
+      if (rid) {
+        setRateContracts((prev) =>
+          prev.map((rc) => (rc.id !== rid ? rc : { ...rc, attachments: filter(rc.attachments) }))
+        );
+      }
+      return;
+    }
+    if (bucket === 'grn-form') {
+      const gid = grnForm.id;
+      setGrnForm((prev) => ({ ...prev, attachments: filter(prev.attachments) }));
+      if (gid) {
+        setGrns((prev) =>
+          prev.map((grn) => (grn.id !== gid ? grn : { ...grn, attachments: filter(grn.attachments) }))
+        );
+      }
+      return;
+    }
+    if (bucket === 'inv-form') {
+      const iid = invoiceForm.id;
+      setInvoiceForm((prev) => ({ ...prev, attachments: filter(prev.attachments) }));
+      if (iid) {
+        setInvoices((prev) =>
+          prev.map((inv) => (inv.id !== iid ? inv : { ...inv, attachments: filter(inv.attachments) }))
+        );
+      }
+    }
   };
 
   const canApprove = (doc: RateContract | GRN | Invoice) => {
@@ -2124,7 +2250,7 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                   <input 
                     type="file" 
                     className="hidden" 
-                    onChange={(e) => handleFileUpload(e, selectedRC ? (selectedGRN ? 'Invoice' : 'GRN') : 'RC')}
+                    onChange={(e) => void handleFileUpload(e, selectedRC ? (selectedGRN ? 'Invoice' : 'GRN') : 'RC')}
                   />
                 </label>
               </div>
@@ -2132,33 +2258,86 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
               <div className="space-y-2">
                 {/* Show inherited documents */}
                 {selectedRC && selectedRC.attachments.map(att => (
-                  <div key={att.id} className="flex items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-200">
-                    <div className="flex items-center space-x-3">
-                      <div className="bg-indigo-100 p-2 rounded-lg text-indigo-600">
+                  <div key={att.id} className="flex items-center justify-between gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                    <div className="flex items-center space-x-3 min-w-0">
+                      <div className="bg-indigo-100 p-2 rounded-lg text-indigo-600 shrink-0">
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
                       </div>
-                      <span className="text-sm font-medium text-slate-600">{att.name} <span className="text-[10px] text-indigo-400 font-black uppercase ml-2">From RC</span></span>
+                      <span className="text-sm font-medium text-slate-600 truncate">{att.name} <span className="text-[10px] text-indigo-400 font-black uppercase ml-2">From RC</span></span>
+                    </div>
+                    <div className="flex shrink-0 gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setViewerAttachment(att)}
+                        className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-[10px] font-black uppercase tracking-wide text-slate-600 hover:bg-slate-100"
+                      >
+                        View Doc
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void removeRcSupportingAttachment(att, 'rc-inherited')}
+                        className="rounded-lg border border-rose-200 bg-white px-2 py-1 text-[10px] font-black uppercase tracking-wide text-rose-600 hover:bg-rose-50"
+                      >
+                        Delete
+                      </button>
                     </div>
                   </div>
                 ))}
                 {selectedGRN && selectedGRN.attachments.map(att => (
-                  <div key={att.id} className="flex items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-200">
-                    <div className="flex items-center space-x-3">
-                      <div className="bg-emerald-100 p-2 rounded-lg text-emerald-600">
+                  <div key={att.id} className="flex items-center justify-between gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                    <div className="flex items-center space-x-3 min-w-0">
+                      <div className="bg-emerald-100 p-2 rounded-lg text-emerald-600 shrink-0">
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
                       </div>
-                      <span className="text-sm font-medium text-slate-600">{att.name} <span className="text-[10px] text-emerald-400 font-black uppercase ml-2">From GRN</span></span>
+                      <span className="text-sm font-medium text-slate-600 truncate">{att.name} <span className="text-[10px] text-emerald-400 font-black uppercase ml-2">From GRN</span></span>
+                    </div>
+                    <div className="flex shrink-0 gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setViewerAttachment(att)}
+                        className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-[10px] font-black uppercase tracking-wide text-slate-600 hover:bg-slate-100"
+                      >
+                        View Doc
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void removeRcSupportingAttachment(att, 'grn-inherited')}
+                        className="rounded-lg border border-rose-200 bg-white px-2 py-1 text-[10px] font-black uppercase tracking-wide text-rose-600 hover:bg-rose-50"
+                      >
+                        Delete
+                      </button>
                     </div>
                   </div>
                 ))}
                 {/* Show current form documents */}
                 {(selectedRC ? (selectedGRN ? invoiceForm : grnForm) : rcForm).attachments?.map(att => (
-                  <div key={att.id} className="flex items-center justify-between bg-white p-3 rounded-xl border-2 border-indigo-100 border-dashed">
-                    <div className="flex items-center space-x-3">
-                      <div className="bg-indigo-600 p-2 rounded-lg text-white">
+                  <div key={att.id} className="flex items-center justify-between gap-2 bg-white p-3 rounded-xl border-2 border-indigo-100 border-dashed">
+                    <div className="flex items-center space-x-3 min-w-0">
+                      <div className="bg-indigo-600 p-2 rounded-lg text-white shrink-0">
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
                       </div>
-                      <span className="text-sm font-bold text-slate-800">{att.name}</span>
+                      <span className="text-sm font-bold text-slate-800 truncate">{att.name}</span>
+                    </div>
+                    <div className="flex shrink-0 gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setViewerAttachment(att)}
+                        className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-[10px] font-black uppercase tracking-wide text-slate-600 hover:bg-slate-100"
+                      >
+                        View Doc
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void removeRcSupportingAttachment(
+                            att,
+                            selectedRC ? (selectedGRN ? 'inv-form' : 'grn-form') : 'rc-form'
+                          )
+                        }
+                        className="rounded-lg border border-rose-200 bg-white px-2 py-1 text-[10px] font-black uppercase tracking-wide text-rose-600 hover:bg-rose-50"
+                      >
+                        Delete
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -2218,7 +2397,9 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
               (viewMode === 'GRN' && !isGrnReadOnly) || 
               (viewMode === 'Invoice' && !isInvoiceReadOnly)) && (
               <button 
-                onClick={selectedRC ? (selectedGRN ? handleCreateInvoice : handleCreateGRN) : handleCreateRC}
+                onClick={() =>
+                  void (selectedRC ? (selectedGRN ? handleCreateInvoice() : handleCreateGRN()) : handleCreateRC())
+                }
                 className="bg-indigo-600 text-white px-8 py-3 rounded-xl font-black shadow-lg shadow-indigo-200 hover:scale-105 transition-transform"
               >
                 Submit for Approval
@@ -2284,7 +2465,15 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                     </div>
                   </td>
                   <td className="px-6 py-4">
-                    <div className="flex space-x-2">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <AttachmentEyeButton
+                        documentTable="rate_contracts"
+                        documentId={rc.id}
+                        refreshKey={attachViewRev}
+                        serverAttachmentHintCount={(rc.attachments ?? []).filter(isServerStoredAttachment).length}
+                        documentCreatedBy={rc.createdBy}
+                        currentUserId={currentUser.id}
+                      />
                       <button 
                         onClick={() => {
                           setRcForm(normalizeRcForForm(rc));
@@ -2405,7 +2594,15 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="flex space-x-2">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <AttachmentEyeButton
+                          documentTable="grns"
+                          documentId={grn.id}
+                          refreshKey={attachViewRev}
+                          serverAttachmentHintCount={(grn.attachments ?? []).filter(isServerStoredAttachment).length}
+                          documentCreatedBy={grn.createdBy}
+                          currentUserId={currentUser.id}
+                        />
                         <button 
                           onClick={() => {
                             setGrnForm(grn);
@@ -2529,7 +2726,15 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
                     </div>
                   </td>
                   <td className="px-6 py-4">
-                    <div className="flex space-x-2">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <AttachmentEyeButton
+                        documentTable="invoices"
+                        documentId={inv.id}
+                        refreshKey={attachViewRev}
+                        serverAttachmentHintCount={(inv.attachments ?? []).filter(isServerStoredAttachment).length}
+                        documentCreatedBy={inv.createdBy}
+                        currentUserId={currentUser.id}
+                      />
                       <button 
                         onClick={() => {
                           setInvoiceForm(inv);
@@ -2641,6 +2846,33 @@ const RateContractModule: React.FC<RateContractModuleProps> = ({
           </div>
         </div>
       )}
+      <DocumentViewerModal
+        open={!!viewerAttachment}
+        attachment={viewerAttachment}
+        onClose={() => setViewerAttachment(null)}
+        onViewRecorded={bumpAttachViewRev}
+        recordAttachmentView={(() => {
+          const att = viewerAttachment;
+          if (!att || !showForm) return true;
+          let creator: string | undefined;
+          let owningDocId: string | undefined;
+          if (selectedRC?.attachments?.some((a) => a.id === att.id)) {
+            creator = selectedRC.createdBy;
+            owningDocId = selectedRC.id;
+          } else if (selectedGRN?.attachments?.some((a) => a.id === att.id)) {
+            creator = selectedGRN.createdBy;
+            owningDocId = selectedGRN.id;
+          } else {
+            const docForm = selectedRC ? (selectedGRN ? invoiceForm : grnForm) : rcForm;
+            if (docForm.attachments?.some((a) => a.id === att.id)) {
+              creator = docForm.createdBy;
+              owningDocId = docForm.id;
+            }
+          }
+          if (!owningDocId) return false;
+          return creator !== currentUser.id;
+        })()}
+      />
       <DocumentAuditLogModal
         isOpen={showAuditModal}
         onClose={() => setShowAuditModal(false)}

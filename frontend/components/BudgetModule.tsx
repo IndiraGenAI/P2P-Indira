@@ -3,6 +3,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Budget, BudgetAmendment, BudgetType, BudgetControlType, BudgetValidity, MasterRecord, MasterType, User, PurchaseOrder, PurchaseRequest, WorkflowV2Rule } from '../types';
 import { getDepartments, getSubdepartmentsForDepartment } from '../utils/mastersHelpers';
 import { apiPatch } from '../api';
+import { UploadBudgetButton } from './Budget/UploadBudgetButton';
+import { UploadBudgetModal } from './Budget/UploadBudgetModal';
 import { Plus, Edit2, History, CheckCircle, XCircle, ArrowRightLeft, TrendingUp, TrendingDown, AlertCircle, BarChart3, PieChart as PieChartIcon, FileText, ChevronDown, ChevronUp, RotateCcw } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
@@ -93,6 +95,7 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
 
   const [view, setView] = useState<'list' | 'amendments' | 'reports'>('list');
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showUploadModal, setShowUploadModal] = useState(false);
   const [showAmendModal, setShowAmendModal] = useState(false);
   const [selectedBudget, setSelectedBudget] = useState<Budget | null>(null);
 
@@ -274,6 +277,12 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
           >
             <History size={18} /> Amendments
           </button>
+          <UploadBudgetButton
+            onClick={() => {
+              setView('list');
+              setShowUploadModal(true);
+            }}
+          />
           <button 
             onClick={() => { setView('list'); setShowAddModal(true); }}
             className="bg-indigo-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-indigo-700 transition-colors"
@@ -673,6 +682,16 @@ const BudgetModule: React.FC<BudgetModuleProps> = ({ budgets, setBudgets, amendm
             </div>
           </div>
         </div>
+      )}
+
+      {showUploadModal && (
+        <UploadBudgetModal
+          open={showUploadModal}
+          onClose={() => setShowUploadModal(false)}
+          masters={masters}
+          budgets={budgets}
+          setBudgets={setBudgets}
+        />
       )}
 
       {/* Add Budget Modal */}

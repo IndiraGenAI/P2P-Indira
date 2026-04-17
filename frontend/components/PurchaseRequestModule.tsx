@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { 
   PurchaseRequest, MasterRecord, MasterType, 
   Attachment, ItemLine, Frequency,
@@ -17,9 +17,18 @@ import {
 } from '../utils/transactionListFilters';
 import MultiSelect from './MultiSelect';
 import TransactionListFilterBar, { ListStatusQuick } from './TransactionListFilterBar';
-import { AlertCircle, Info } from 'lucide-react';
+import { AlertCircle, AlertTriangle, Info, Paperclip } from 'lucide-react';
 import DocumentAuditLogModal from './DocumentAuditLogModal';
 import { apiDownloadFile } from '../api';
+import { DocumentViewerModal } from './shared/DocumentViewerModal';
+import { AttachmentEyeButton } from './shared/AttachmentEyeButton';
+import {
+  deleteServerAttachment,
+  fetchAttachmentViewStatus,
+  isServerStoredAttachment,
+  linkDocumentAttachments,
+  uploadServerAttachment,
+} from '../utils/serverAttachment';
 
 export type PurchaseRequestModuleEntryIntent = {
   key: number;
@@ -61,7 +70,17 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
   const vendorsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Vendor', masters.Vendor ?? []) as MasterRecord[];
   const itemsForDropdown = filterByWorkflowApproval(workflowV2Rules, 'Item', masters.Item ?? []) as MasterRecord[];
   const budgetsForDeduction = filterByWorkflowApproval<Budget>(workflowV2Rules, 'Budget', budgets);
+  const prAttachDraftRef = useRef(`draft-${crypto.randomUUID()}`);
   const [showForm, setShowForm] = useState(false);
+  const [viewerAttachment, setViewerAttachment] = useState<Attachment | null>(null);
+  const [attachViewRev, setAttachViewRev] = useState(0);
+  const bumpAttachViewRev = useCallback(() => setAttachViewRev((n) => n + 1), []);
+  /** Attachment view counts for reviewer/approver gate in PR detail modal */
+  const [prModalAttachStatus, setPrModalAttachStatus] = useState<{
+    loading: boolean;
+    total: number;
+    viewed: number;
+  } | null>(null);
   const [prForm, setPrForm] = useState<Partial<PurchaseRequest>>({
     entityName: masters.Entity?.[0]?.name || '',
     vendorId: '',
@@ -233,7 +252,7 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
     return { ok: errors.length === 0, errors };
   };
 
-  const handleCreatePR = () => {
+  const handleCreatePR = async () => {
     if (!prForm.department || !prForm.subDepartment || (prForm.centerNames || []).length === 0) {
       alert('Please fill all mandatory fields.');
       return;
@@ -259,12 +278,20 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
       attachments: prForm.attachments || [],
       workflowStepHistory: [{ action: 'submit', userId: currentUser.id, at: new Date().toISOString(), stepIndex: 0 }]
     };
+    const draft = prAttachDraftRef.current;
+    try {
+      await linkDocumentAttachments('purchase_requests', draft, newPR.id);
+    } catch (e) {
+      alert((e as Error).message || 'Failed to link uploaded files to this PR.');
+    }
+    prAttachDraftRef.current = `draft-${crypto.randomUUID()}`;
     setPurchaseRequests([...purchaseRequests, newPR]);
     setShowForm(false);
     resetForm();
   };
 
   const resetForm = () => {
+    prAttachDraftRef.current = `draft-${crypto.randomUUID()}`;
     setPrForm({
       entityName: masters.Entity?.[0]?.name || '',
       vendorId: '', vendorSiteId: '', transactionType: getItemTypesFromMasters(masters)[0]?.name ?? '', validFrom: getTodayISTDate(), validTo: '', requiredDate: '',
@@ -275,20 +302,51 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
     });
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const newAttachment: Attachment = {
-      id: `att-${Math.random()}`,
-      name: file.name,
-      url: URL.createObjectURL(file),
-      uploadedAt: new Date().toISOString(),
-      source: 'PR'
-    };
-
-    setPrForm(prev => ({ ...prev, attachments: [...(prev.attachments || []), newAttachment] }));
+    const docId =
+      prForm.id && String(prForm.id).trim() !== '' ? String(prForm.id).trim() : prAttachDraftRef.current;
+    try {
+      const meta = await uploadServerAttachment('purchase_requests', docId, file);
+      const newAttachment: Attachment = {
+        id: meta.id,
+        name: meta.name,
+        url: meta.url,
+        uploadedAt: meta.uploadedAt,
+        source: 'PR',
+      };
+      setPrForm((prev) => ({ ...prev, attachments: [...(prev.attachments || []), newAttachment] }));
+    } catch (err) {
+      alert((err as Error).message || 'Upload failed');
+    }
     e.target.value = '';
+  };
+
+  const removePrAttachment = async (att: Attachment) => {
+    if (isServerStoredAttachment(att)) {
+      try {
+        await deleteServerAttachment(att.id);
+      } catch (e) {
+        alert((e as Error).message || 'Failed to delete file');
+        return;
+      }
+    }
+    const prId = prForm.id;
+    setPrForm((prev) => ({
+      ...prev,
+      attachments: (prev.attachments ?? []).filter((a) => a.id !== att.id),
+    }));
+    if (prId) {
+      setPurchaseRequests((prev) =>
+        prev.map((p) =>
+          p.id !== prId ? p : { ...p, attachments: (p.attachments ?? []).filter((a) => a.id !== att.id) }
+        )
+      );
+    }
+    setViewerAttachment((v) => (v?.id === att.id ? null : v));
+    bumpAttachViewRev();
   };
 
   const canApprove = (pr: PurchaseRequest) => {
@@ -373,6 +431,142 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
     alert('PR status reset to Pending for amendment. It will follow the approval workflow again.');
   };
 
+  const livePr = useMemo(
+    () => (prForm.id ? purchaseRequests.find((p) => p.id === prForm.id) : undefined),
+    [purchaseRequests, prForm.id]
+  );
+
+  const isReviewerOrApproverView = Boolean(
+    prForm.id &&
+      livePr &&
+      livePr.status === 'Pending' &&
+      (canCompleteReview(livePr) || canApprove(livePr))
+  );
+
+  const assertAllPrAttachmentsViewedForUser = async (
+    prId: string
+  ): Promise<
+    | { ok: true; status: Awaited<ReturnType<typeof fetchAttachmentViewStatus>> }
+    | { ok: false; reason: 'network'; message: string }
+    | { ok: false; reason: 'incomplete'; status: Awaited<ReturnType<typeof fetchAttachmentViewStatus>> }
+  > => {
+    try {
+      const s = await fetchAttachmentViewStatus('purchase_requests', prId);
+      if (s.totalAttachments === 0 || s.allViewed) return { ok: true, status: s };
+      return { ok: false, reason: 'incomplete', status: s };
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Failed to verify attachment views.';
+      return { ok: false, reason: 'network', message };
+    }
+  };
+
+  const completeReviewPRWithAttachmentGate = async (id: string) => {
+    const gate = await assertAllPrAttachmentsViewedForUser(id);
+    if (gate.ok === false) {
+      if (gate.reason === 'network') {
+        alert(gate.message);
+      } else {
+        alert(
+          `You must view all supporting documents before completing review. Viewed ${gate.status.viewedByMe} of ${gate.status.totalAttachments}.`
+        );
+      }
+      return;
+    }
+    completeReviewPR(id);
+    if (showForm) {
+      setShowForm(false);
+      resetForm();
+    }
+  };
+
+  const approvePRWithAttachmentGate = async (id: string) => {
+    const gate = await assertAllPrAttachmentsViewedForUser(id);
+    if (gate.ok === false) {
+      if (gate.reason === 'network') {
+        alert(gate.message);
+      } else {
+        alert(
+          `You must view all supporting documents before approving. Viewed ${gate.status.viewedByMe} of ${gate.status.totalAttachments}.`
+        );
+      }
+      return;
+    }
+    approvePR(id);
+    if (showForm) {
+      setShowForm(false);
+      resetForm();
+    }
+  };
+
+  useEffect(() => {
+    if (!showForm || !prForm.id || !isReviewerOrApproverView) {
+      setPrModalAttachStatus(null);
+      return;
+    }
+    let cancelled = false;
+    setPrModalAttachStatus((prev) => ({
+      loading: true,
+      total: prev?.total ?? 0,
+      viewed: prev?.viewed ?? 0,
+    }));
+    void fetchAttachmentViewStatus('purchase_requests', prForm.id)
+      .then((s) => {
+        if (cancelled) return;
+        setPrModalAttachStatus({
+          loading: false,
+          total: s.totalAttachments,
+          viewed: s.viewedByMe,
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        const hint = (prForm.attachments ?? []).filter(isServerStoredAttachment).length;
+        setPrModalAttachStatus(
+          hint > 0
+            ? { loading: false, total: hint, viewed: 0 }
+            : { loading: false, total: 0, viewed: 0 }
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showForm, prForm.id, prForm.attachments, isReviewerOrApproverView, attachViewRev]);
+
+  const livePrStepKey = livePr ? `${livePr.id}-${livePr.status}-${livePr.currentStepIndex}` : '';
+
+  useEffect(() => {
+    if (!showForm || !prForm.id || !livePr || !isReviewerOrApproverView) return;
+    setPrForm((prev) => {
+      if (prev.id !== livePr.id) return prev;
+      return {
+        ...livePr,
+        items: (livePr.items || []).map((it) => ({
+          ...it,
+          id: it.id || Math.random().toString(),
+        })),
+        attachments: livePr.attachments || [],
+      };
+    });
+  }, [livePrStepKey, showForm, isReviewerOrApproverView, prForm.id, livePr]);
+
+  /** Keep detail form aligned with list when workflow status changes (e.g. final approve). */
+  useEffect(() => {
+    if (!showForm || !prForm.id || !livePr || livePr.id !== prForm.id) return;
+    if (isReviewerOrApproverView) return;
+    if (livePr.status === prForm.status && livePr.currentStepIndex === prForm.currentStepIndex) return;
+    setPrForm((prev) => {
+      if (prev.id !== livePr.id) return prev;
+      return {
+        ...livePr,
+        items: (livePr.items || []).map((it) => ({
+          ...it,
+          id: it.id || Math.random().toString(),
+        })),
+        attachments: livePr.attachments || [],
+      };
+    });
+  }, [showForm, prForm.id, prForm.status, prForm.currentStepIndex, livePr, isReviewerOrApproverView]);
+
   const openPrView = (pr: PurchaseRequest) => {
     setPrForm({
       ...pr,
@@ -386,8 +580,8 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
     try {
       setDownloadingDocId(id);
       await apiDownloadFile(`purchase-requests/${id}/download`, `purchase-request-${id}.pdf`);
-    } catch (e: any) {
-      alert(e?.message || 'Failed to download PDF.');
+    } catch (e: unknown) {
+      alert(e instanceof Error ? e.message : 'Failed to download PDF.');
     } finally {
       setDownloadingDocId(null);
     }
@@ -414,7 +608,10 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
               vendors={vendorOptionsForList}
             />
             <button
-              onClick={() => setShowForm(true)}
+              onClick={() => {
+                resetForm();
+                setShowForm(true);
+              }}
               className="bg-indigo-600 text-white px-4 py-2 rounded-xl font-black shadow-lg shadow-indigo-200 hover:scale-105 transition-transform shrink-0"
             >
               + Raise New PR
@@ -442,6 +639,10 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
             </button>
           </div>
 
+          <fieldset
+            disabled={isReviewerOrApproverView}
+            className="min-w-0 border-0 p-0 m-0 disabled:opacity-90"
+          >
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-2">
               <label className="text-xs font-black text-slate-500 uppercase tracking-wider">Entity</label>
@@ -718,6 +919,11 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
                   <div className="text-2xl font-black text-indigo-600">₹{prForm.amount?.toLocaleString()}</div>
                 </div>
               </div>
+            </div>
+          </div>
+          </fieldset>
+
+          <div className="mt-6 w-full border-t border-slate-100 pt-6">
               <div className="flex justify-between items-center mb-4">
                 <h4 className="text-sm font-black text-slate-700 uppercase tracking-wider">Supporting Documents</h4>
                 <label className="cursor-pointer">
@@ -727,25 +933,129 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
               </div>
               <div className="flex flex-wrap gap-3">
                 {prForm.attachments?.map(att => (
-                  <div key={att.id} className="flex items-center bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
-                    <svg className="w-4 h-4 text-slate-400 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
-                    <span className="text-xs font-bold text-slate-600 truncate max-w-[150px]">{att.name}</span>
+                  <div key={att.id} className="flex items-center gap-2 bg-slate-50 px-3 py-2 rounded-xl border border-slate-200">
+                    <svg className="w-4 h-4 text-slate-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
+                    <span className="text-xs font-bold text-slate-600 truncate max-w-[120px]">{att.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => setViewerAttachment(att)}
+                      className="shrink-0 rounded-lg border border-slate-300 bg-white px-2 py-1 text-[10px] font-black uppercase tracking-wide text-slate-600 hover:bg-slate-100"
+                    >
+                      View Doc
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void removePrAttachment(att)}
+                      className="shrink-0 rounded-lg border border-rose-200 bg-white px-2 py-1 text-[10px] font-black uppercase tracking-wide text-rose-600 hover:bg-rose-50"
+                    >
+                      Delete
+                    </button>
                   </div>
                 ))}
               </div>
             </div>
-          </div>
 
-          <div className="mt-8 flex justify-end space-x-4">
-            <button onClick={() => { setShowForm(false); resetForm(); }} className="px-6 py-3 rounded-xl font-black text-slate-500 hover:bg-slate-50 transition-colors">Cancel</button>
-            <button 
-              onClick={handleCreatePR}
-              disabled={!!prForm.id}
-              className="bg-indigo-600 text-white px-8 py-3 rounded-xl font-black shadow-lg shadow-indigo-200 hover:scale-105 transition-transform"
-            >
-              {prForm.id ? 'View Mode' : 'Submit Purchase Request'}
-            </button>
+          {(() => {
+            const serverAttachCount = (prForm.attachments ?? []).filter(isServerStoredAttachment).length;
+            const modalAttachIncomplete =
+              isReviewerOrApproverView &&
+              prModalAttachStatus != null &&
+              !prModalAttachStatus.loading &&
+              prModalAttachStatus.total > 0 &&
+              prModalAttachStatus.viewed < prModalAttachStatus.total;
+            const modalPrimaryDisabled =
+              isReviewerOrApproverView &&
+              Boolean(
+                prModalAttachStatus?.loading ||
+                  (prModalAttachStatus != null &&
+                    prModalAttachStatus.total > 0 &&
+                    prModalAttachStatus.viewed < prModalAttachStatus.total)
+              );
+
+            return (
+          <div className="mt-8 space-y-4 border-t border-slate-100 pt-6">
+            {modalAttachIncomplete && (
+              <div
+                className="flex gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-left"
+                role="alert"
+              >
+                <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" aria-hidden />
+                <div className="space-y-1 text-sm text-amber-900">
+                  <p className="font-bold">
+                    {livePr && canApprove(livePr) && !canCompleteReview(livePr)
+                      ? 'You must view all supporting documents before you can approve.'
+                      : livePr && canCompleteReview(livePr) && !canApprove(livePr)
+                        ? 'You must view all supporting documents before you can complete your review.'
+                        : 'You must view all supporting documents before continuing.'}
+                  </p>
+                  <p className="flex flex-wrap items-center gap-1.5 font-medium text-amber-800">
+                    <Paperclip className="h-4 w-4 shrink-0 text-amber-700" aria-hidden />
+                    You have viewed {prModalAttachStatus?.viewed ?? 0} of {prModalAttachStatus?.total ?? serverAttachCount} documents.
+                  </p>
+                  <p className="text-xs text-amber-800">Please click &quot;View Doc&quot; on each attachment.</p>
+                </div>
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowForm(false);
+                  resetForm();
+                }}
+                className="rounded-xl border border-slate-300 bg-white px-6 py-3 font-black text-slate-600 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {!prForm.id && (
+                  <button
+                    type="button"
+                    onClick={() => void handleCreatePR()}
+                    className="rounded-xl bg-indigo-600 px-8 py-3 font-black text-white shadow-lg shadow-indigo-200 hover:scale-105 transition-transform"
+                  >
+                    Submit Purchase Request
+                  </button>
+                )}
+                {prForm.id && livePr?.status === 'Approved' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      amendPR(livePr.id);
+                      setShowForm(false);
+                      resetForm();
+                    }}
+                    className="rounded-xl bg-slate-600 px-6 py-3 font-black uppercase tracking-wider text-white hover:scale-105 transition-transform"
+                  >
+                    Amend
+                  </button>
+                )}
+                {prForm.id && livePr && livePr.status === 'Pending' && canCompleteReview(livePr) && (
+                  <button
+                    type="button"
+                    disabled={modalPrimaryDisabled}
+                    onClick={() => void completeReviewPRWithAttachmentGate(livePr.id)}
+                    className="rounded-xl bg-amber-600 px-6 py-3 font-black uppercase tracking-wider text-white shadow-md hover:scale-105 transition-transform disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100"
+                  >
+                    Complete Review
+                  </button>
+                )}
+                {prForm.id && livePr && livePr.status === 'Pending' && canApprove(livePr) && (
+                  <button
+                    type="button"
+                    disabled={modalPrimaryDisabled}
+                    onClick={() => void approvePRWithAttachmentGate(livePr.id)}
+                    className="rounded-xl bg-emerald-600 px-6 py-3 font-black uppercase tracking-wider text-white shadow-md hover:scale-105 transition-transform disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100"
+                  >
+                    Approve
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
+            );
+          })()}
         </div>
       ) : (
         <div className="bg-white rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden">
@@ -890,10 +1200,25 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
                     )}
                   </td>
                   <td className="px-6 py-4 text-right">
-                    <div className="flex justify-end space-x-2">
+                    <div className="flex justify-end items-center flex-wrap gap-2">
+                      <AttachmentEyeButton
+                        documentTable="purchase_requests"
+                        documentId={pr.id}
+                        refreshKey={attachViewRev}
+                        serverAttachmentHintCount={(pr.attachments ?? []).filter(isServerStoredAttachment).length}
+                        documentCreatedBy={pr.createdBy}
+                        currentUserId={currentUser.id}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => openPrView(pr)}
+                        className="bg-white border border-slate-300 text-slate-700 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-slate-50"
+                      >
+                        View
+                      </button>
                       {canCompleteReview(pr) && (
                         <button 
-                          onClick={() => completeReviewPR(pr.id)}
+                          onClick={() => void completeReviewPRWithAttachmentGate(pr.id)}
                           className="bg-amber-600 text-white px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider hover:scale-105 transition-transform"
                         >
                           Complete Review
@@ -901,20 +1226,14 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
                       )}
                       {canApprove(pr) && (
                         <button 
-                          onClick={() => approvePR(pr.id)}
+                          onClick={() => void approvePRWithAttachmentGate(pr.id)}
                           className="bg-emerald-600 text-white px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider hover:scale-105 transition-transform"
                         >
                           Approve
                         </button>
                       )}
                       {pr.status === 'Approved' && (
-                        <div className="flex space-x-2">
-                          <button
-                            onClick={() => openPrView(pr)}
-                            className="bg-white border border-slate-300 text-slate-700 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider hover:bg-slate-50"
-                          >
-                            View
-                          </button>
+                        <div className="flex flex-wrap gap-2">
                           <button 
                             onClick={() => onCreatePO(pr)}
                             className="bg-indigo-600 text-white px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider hover:scale-105 transition-transform"
@@ -962,6 +1281,13 @@ const PurchaseRequestModule: React.FC<PurchaseRequestModuleProps> = ({
         status={selectedAuditDoc?.status}
         history={(selectedAuditDoc as any)?.workflowStepHistory || []}
         users={[currentUser]}
+      />
+      <DocumentViewerModal
+        open={viewerAttachment != null}
+        attachment={viewerAttachment}
+        onClose={() => setViewerAttachment(null)}
+        onViewRecorded={bumpAttachViewRev}
+        recordAttachmentView={Boolean(prForm.id) && prForm.createdBy !== currentUser.id}
       />
     </div>
   );

@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import Papa from 'papaparse';
 import { 
   PurchaseOrder, GRN, Invoice, MasterRecord, MasterType, 
@@ -23,6 +23,14 @@ import SearchableSelect from './SearchableSelect';
 import { AlertCircle, Info, ShieldCheck, ShieldAlert } from 'lucide-react';
 import { apiDownloadFile, apiGet } from '../api';
 import DocumentAuditLogModal from './DocumentAuditLogModal';
+import { DocumentViewerModal } from './shared/DocumentViewerModal';
+import { AttachmentEyeButton } from './shared/AttachmentEyeButton';
+import {
+  deleteServerAttachment,
+  isServerStoredAttachment,
+  linkDocumentAttachments,
+  uploadServerAttachment,
+} from '../utils/serverAttachment';
 
 const PO_LINE_GST_USE_HEADER = '__HEADER__' as const;
 
@@ -275,6 +283,13 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     isAdvancePO: false,
     currencyCode: (masters['Currency']?.[0]?.name as string | undefined) || 'INR',
   });
+
+  const poAttachDraftRef = useRef(`draft-${crypto.randomUUID()}`);
+  const grnAttachDraftRef = useRef(`draft-${crypto.randomUUID()}`);
+  const invAttachDraftRef = useRef(`draft-${crypto.randomUUID()}`);
+  const [viewerAttachment, setViewerAttachment] = useState<Attachment | null>(null);
+  const [attachViewRev, setAttachViewRev] = useState(0);
+  const bumpAttachViewRev = useCallback(() => setAttachViewRev((n) => n + 1), []);
 
   // Handle pending PR
   useEffect(() => {
@@ -741,7 +756,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     e.target.value = '';
   };
 
-  const handleCreatePO = () => {
+  const handleCreatePO = async () => {
     // Validation
     if (!poForm.vendorId || !poForm.department || !poForm.subDepartment) {
       alert('Please fill all mandatory header fields.');
@@ -803,6 +818,13 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       newPO.advanceAmount = undefined;
       newPO.expectedInvoiceType = undefined;
     }
+    const draft = poAttachDraftRef.current;
+    try {
+      await linkDocumentAttachments('purchase_orders', draft, newPO.id);
+    } catch (e) {
+      alert((e as Error).message || 'Failed to link uploaded files to this PO.');
+    }
+    poAttachDraftRef.current = `draft-${crypto.randomUUID()}`;
     setPurchaseOrders([...purchaseOrders, newPO]);
     setShowForm(false);
     resetForms();
@@ -958,7 +980,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
     closePoGrnSelectionModal();
   };
 
-  const handleCreateGRN = () => {
+  const handleCreateGRN = async () => {
     if (!selectedPO) return;
     const items = grnForm.items || [];
     if (items.length === 0) {
@@ -989,12 +1011,19 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       attachments: grnForm.attachments || [],
       workflowStepHistory: [{ action: 'submit', userId: currentUser.id, at: new Date().toISOString(), stepIndex: 0 }]
     };
+    const draft = grnAttachDraftRef.current;
+    try {
+      await linkDocumentAttachments('grns', draft, newGRN.id);
+    } catch (e) {
+      alert((e as Error).message || 'Failed to link uploaded files to this GRN.');
+    }
+    grnAttachDraftRef.current = `draft-${crypto.randomUUID()}`;
     setGrns([...grns, newGRN]);
     setShowForm(false);
     resetForms();
   };
 
-  const handleCreateInvoice = () => {
+  const handleCreateInvoice = async () => {
     if (!selectedGRN) return;
     const poForInv = purchaseOrders.find((p) => p.id === selectedGRN.purchaseOrderId);
     const defaultCur = (masters['Currency']?.[0]?.name as string | undefined) || 'INR';
@@ -1023,12 +1052,22 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
       invoiceSource: invoiceForm.invoiceSource || defaultSrc,
       invoiceType: invoiceTypeResolved,
     };
+    const draft = invAttachDraftRef.current;
+    try {
+      await linkDocumentAttachments('invoices', draft, newInvoice.id);
+    } catch (e) {
+      alert((e as Error).message || 'Failed to link uploaded files to this invoice.');
+    }
+    invAttachDraftRef.current = `draft-${crypto.randomUUID()}`;
     setInvoices([...invoices, newInvoice]);
     setShowForm(false);
     resetForms();
   };
 
   const resetForms = () => {
+    poAttachDraftRef.current = `draft-${crypto.randomUUID()}`;
+    grnAttachDraftRef.current = `draft-${crypto.randomUUID()}`;
+    invAttachDraftRef.current = `draft-${crypto.randomUUID()}`;
     setPoForm({
       entityName: masters.Entity?.[0]?.name || '',
       vendorId: '', vendorSiteId: '', transactionType: getItemTypesFromMasters(masters)[0]?.name ?? '', validFrom: getTodayISTDate(), validTo: '',
@@ -1173,24 +1212,112 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
 
   const isGrnReadOnly = !!grnForm.id && !(grnForm.status === 'Rejected' && grnForm.createdBy === currentUser.id);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>, source: Attachment['source']) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, source: Attachment['source']) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const newAttachment: Attachment = {
-      id: `att-${Math.random()}`,
-      name: file.name,
-      url: URL.createObjectURL(file),
-      uploadedAt: new Date().toISOString(),
-      source
-    };
+    let documentTable = 'purchase_orders';
+    let documentId = '';
+    if (source === 'PO') {
+      documentTable = 'purchase_orders';
+      documentId =
+        poForm.id && String(poForm.id).trim() !== '' ? String(poForm.id).trim() : poAttachDraftRef.current;
+    } else if (source === 'GRN') {
+      documentTable = 'grns';
+      documentId =
+        grnForm.id && String(grnForm.id).trim() !== '' ? String(grnForm.id).trim() : grnAttachDraftRef.current;
+    } else {
+      documentTable = 'invoices';
+      documentId =
+        invoiceForm.id && String(invoiceForm.id).trim() !== ''
+          ? String(invoiceForm.id).trim()
+          : invAttachDraftRef.current;
+    }
 
-    if (source === 'PO') setPoForm(prev => ({ ...prev, attachments: [...(prev.attachments || []), newAttachment] }));
-    if (source === 'GRN') setGrnForm(prev => ({ ...prev, attachments: [...(prev.attachments || []), newAttachment] }));
-    if (source === 'Invoice') setInvoiceForm(prev => ({ ...prev, attachments: [...(prev.attachments || []), newAttachment] }));
-    
-    // Reset input
+    try {
+      const meta = await uploadServerAttachment(documentTable, documentId, file);
+      const newAttachment: Attachment = {
+        id: meta.id,
+        name: meta.name,
+        url: meta.url,
+        uploadedAt: meta.uploadedAt,
+        source,
+      };
+      if (source === 'PO') setPoForm((prev) => ({ ...prev, attachments: [...(prev.attachments || []), newAttachment] }));
+      if (source === 'GRN') setGrnForm((prev) => ({ ...prev, attachments: [...(prev.attachments || []), newAttachment] }));
+      if (source === 'Invoice')
+        setInvoiceForm((prev) => ({ ...prev, attachments: [...(prev.attachments || []), newAttachment] }));
+    } catch (err) {
+      alert((err as Error).message || 'Upload failed');
+    }
+
     e.target.value = '';
+  };
+
+  type PoAttachBucket = 'po-inherited' | 'grn-inherited' | 'po-form' | 'grn-form' | 'inv-form';
+
+  const removePoSupportingAttachment = async (att: Attachment, bucket: PoAttachBucket) => {
+    if (isServerStoredAttachment(att)) {
+      try {
+        await deleteServerAttachment(att.id);
+      } catch (e) {
+        alert((e as Error).message || 'Failed to delete file');
+        return;
+      }
+    }
+    const filter = (xs: Attachment[] | undefined) => (xs ?? []).filter((a) => a.id !== att.id);
+    setViewerAttachment((v) => (v?.id === att.id ? null : v));
+    bumpAttachViewRev();
+
+    if (bucket === 'po-inherited' && selectedPO) {
+      const pid = selectedPO.id;
+      setPurchaseOrders((prev) =>
+        prev.map((po) => (po.id !== pid ? po : { ...po, attachments: filter(po.attachments) }))
+      );
+      setSelectedPO((prev) =>
+        prev && prev.id === pid ? { ...prev, attachments: filter(prev.attachments) } : prev
+      );
+      return;
+    }
+    if (bucket === 'grn-inherited' && selectedGRN) {
+      const gid = selectedGRN.id;
+      setGrns((prev) =>
+        prev.map((grn) => (grn.id !== gid ? grn : { ...grn, attachments: filter(grn.attachments) }))
+      );
+      setSelectedGRN((prev) =>
+        prev && prev.id === gid ? { ...prev, attachments: filter(prev.attachments) } : prev
+      );
+      return;
+    }
+    if (bucket === 'po-form') {
+      const pid = poForm.id;
+      setPoForm((prev) => ({ ...prev, attachments: filter(prev.attachments) }));
+      if (pid) {
+        setPurchaseOrders((prev) =>
+          prev.map((po) => (po.id !== pid ? po : { ...po, attachments: filter(po.attachments) }))
+        );
+      }
+      return;
+    }
+    if (bucket === 'grn-form') {
+      const gid = grnForm.id;
+      setGrnForm((prev) => ({ ...prev, attachments: filter(prev.attachments) }));
+      if (gid) {
+        setGrns((prev) =>
+          prev.map((grn) => (grn.id !== gid ? grn : { ...grn, attachments: filter(grn.attachments) }))
+        );
+      }
+      return;
+    }
+    if (bucket === 'inv-form') {
+      const iid = invoiceForm.id;
+      setInvoiceForm((prev) => ({ ...prev, attachments: filter(prev.attachments) }));
+      if (iid) {
+        setInvoices((prev) =>
+          prev.map((inv) => (inv.id !== iid ? inv : { ...inv, attachments: filter(inv.attachments) }))
+        );
+      }
+    }
   };
 
   const canApprove = (doc: PurchaseOrder | GRN | Invoice) => {
@@ -2642,7 +2769,7 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                   <input 
                     type="file" 
                     className="hidden" 
-                    onChange={(e) => handleFileUpload(e, selectedPO ? (selectedGRN ? 'Invoice' : 'GRN') : 'PO')}
+                    onChange={(e) => void handleFileUpload(e, selectedPO ? (selectedGRN ? 'Invoice' : 'GRN') : 'PO')}
                   />
                 </label>
               </div>
@@ -2650,33 +2777,86 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
               <div className="space-y-2">
                 {/* Show inherited documents */}
                 {selectedPO && selectedPO.attachments.map(att => (
-                  <div key={att.id} className="flex items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-200">
-                    <div className="flex items-center space-x-3">
-                      <div className="bg-indigo-100 p-2 rounded-lg text-indigo-600">
+                  <div key={att.id} className="flex items-center justify-between gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                    <div className="flex items-center space-x-3 min-w-0">
+                      <div className="bg-indigo-100 p-2 rounded-lg text-indigo-600 shrink-0">
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
                       </div>
-                      <span className="text-sm font-medium text-slate-600">{att.name} <span className="text-[10px] text-indigo-400 font-black uppercase ml-2">From PO</span></span>
+                      <span className="text-sm font-medium text-slate-600 truncate">{att.name} <span className="text-[10px] text-indigo-400 font-black uppercase ml-2">From PO</span></span>
+                    </div>
+                    <div className="flex shrink-0 gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setViewerAttachment(att)}
+                        className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-[10px] font-black uppercase tracking-wide text-slate-600 hover:bg-slate-100"
+                      >
+                        View Doc
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void removePoSupportingAttachment(att, 'po-inherited')}
+                        className="rounded-lg border border-rose-200 bg-white px-2 py-1 text-[10px] font-black uppercase tracking-wide text-rose-600 hover:bg-rose-50"
+                      >
+                        Delete
+                      </button>
                     </div>
                   </div>
                 ))}
                 {selectedGRN && selectedGRN.attachments.map(att => (
-                  <div key={att.id} className="flex items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-200">
-                    <div className="flex items-center space-x-3">
-                      <div className="bg-emerald-100 p-2 rounded-lg text-emerald-600">
+                  <div key={att.id} className="flex items-center justify-between gap-2 bg-slate-50 p-3 rounded-xl border border-slate-200">
+                    <div className="flex items-center space-x-3 min-w-0">
+                      <div className="bg-emerald-100 p-2 rounded-lg text-emerald-600 shrink-0">
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
                       </div>
-                      <span className="text-sm font-medium text-slate-600">{att.name} <span className="text-[10px] text-emerald-400 font-black uppercase ml-2">From GRN</span></span>
+                      <span className="text-sm font-medium text-slate-600 truncate">{att.name} <span className="text-[10px] text-emerald-400 font-black uppercase ml-2">From GRN</span></span>
+                    </div>
+                    <div className="flex shrink-0 gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setViewerAttachment(att)}
+                        className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-[10px] font-black uppercase tracking-wide text-slate-600 hover:bg-slate-100"
+                      >
+                        View Doc
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void removePoSupportingAttachment(att, 'grn-inherited')}
+                        className="rounded-lg border border-rose-200 bg-white px-2 py-1 text-[10px] font-black uppercase tracking-wide text-rose-600 hover:bg-rose-50"
+                      >
+                        Delete
+                      </button>
                     </div>
                   </div>
                 ))}
                 {/* Show current form documents */}
                 {(selectedPO ? (selectedGRN ? invoiceForm : grnForm) : poForm).attachments?.map(att => (
-                  <div key={att.id} className="flex items-center justify-between bg-white p-3 rounded-xl border-2 border-indigo-100 border-dashed">
-                    <div className="flex items-center space-x-3">
-                      <div className="bg-indigo-600 p-2 rounded-lg text-white">
+                  <div key={att.id} className="flex items-center justify-between gap-2 bg-white p-3 rounded-xl border-2 border-indigo-100 border-dashed">
+                    <div className="flex items-center space-x-3 min-w-0">
+                      <div className="bg-indigo-600 p-2 rounded-lg text-white shrink-0">
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
                       </div>
-                      <span className="text-sm font-bold text-slate-800">{att.name}</span>
+                      <span className="text-sm font-bold text-slate-800 truncate">{att.name}</span>
+                    </div>
+                    <div className="flex shrink-0 gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setViewerAttachment(att)}
+                        className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-[10px] font-black uppercase tracking-wide text-slate-600 hover:bg-slate-100"
+                      >
+                        View Doc
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void removePoSupportingAttachment(
+                            att,
+                            selectedPO ? (selectedGRN ? 'inv-form' : 'grn-form') : 'po-form'
+                          )
+                        }
+                        className="rounded-lg border border-rose-200 bg-white px-2 py-1 text-[10px] font-black uppercase tracking-wide text-rose-600 hover:bg-rose-50"
+                      >
+                        Delete
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -2692,7 +2872,9 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
               Cancel
             </button>
             <button 
-              onClick={selectedPO ? (selectedGRN ? handleCreateInvoice : handleCreateGRN) : handleCreatePO}
+              onClick={() =>
+                void (selectedPO ? (selectedGRN ? handleCreateInvoice() : handleCreateGRN()) : handleCreatePO())
+              }
               className="bg-indigo-600 text-white px-8 py-3 rounded-xl font-black shadow-lg shadow-indigo-200 hover:scale-105 transition-transform"
             >
               Submit for Approval
@@ -2758,7 +2940,15 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                   </td>
                   <td className="px-6 py-4">
                     <div className="flex flex-col space-y-2">
-                      <div className="flex space-x-2">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <AttachmentEyeButton
+                          documentTable="purchase_orders"
+                          documentId={po.id}
+                          refreshKey={attachViewRev}
+                          serverAttachmentHintCount={(po.attachments ?? []).filter(isServerStoredAttachment).length}
+                          documentCreatedBy={po.createdBy}
+                          currentUserId={currentUser.id}
+                        />
                         <button
                           onClick={() => {
                             setPoForm({
@@ -2892,6 +3082,14 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <AttachmentEyeButton
+                          documentTable="grns"
+                          documentId={grn.id}
+                          refreshKey={attachViewRev}
+                          serverAttachmentHintCount={(grn.attachments ?? []).filter(isServerStoredAttachment).length}
+                          documentCreatedBy={grn.createdBy}
+                          currentUserId={currentUser.id}
+                        />
                         <button
                           onClick={() => {
                             setGrnForm(grn);
@@ -3009,6 +3207,14 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <AttachmentEyeButton
+                          documentTable="invoices"
+                          documentId={inv.id}
+                          refreshKey={attachViewRev}
+                          serverAttachmentHintCount={(inv.attachments ?? []).filter(isServerStoredAttachment).length}
+                          documentCreatedBy={inv.createdBy}
+                          currentUserId={currentUser.id}
+                        />
                         <button
                           onClick={() => {
                             setInvoiceForm(inv);
@@ -3155,6 +3361,33 @@ const PurchaseOrderModule: React.FC<PurchaseOrderModuleProps> = ({
           </div>
         </div>
       )}
+      <DocumentViewerModal
+        open={!!viewerAttachment}
+        attachment={viewerAttachment}
+        onClose={() => setViewerAttachment(null)}
+        onViewRecorded={bumpAttachViewRev}
+        recordAttachmentView={(() => {
+          const att = viewerAttachment;
+          if (!att || !showForm) return true;
+          let creator: string | undefined;
+          let owningDocId: string | undefined;
+          if (selectedPO?.attachments?.some((a) => a.id === att.id)) {
+            creator = selectedPO.createdBy;
+            owningDocId = selectedPO.id;
+          } else if (selectedGRN?.attachments?.some((a) => a.id === att.id)) {
+            creator = selectedGRN.createdBy;
+            owningDocId = selectedGRN.id;
+          } else {
+            const docForm = selectedPO ? (selectedGRN ? invoiceForm : grnForm) : poForm;
+            if (docForm.attachments?.some((a) => a.id === att.id)) {
+              creator = docForm.createdBy;
+              owningDocId = docForm.id;
+            }
+          }
+          if (!owningDocId) return false;
+          return creator !== currentUser.id;
+        })()}
+      />
       <DocumentAuditLogModal
         isOpen={showAuditModal}
         onClose={() => setShowAuditModal(false)}

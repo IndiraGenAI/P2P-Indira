@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import Papa from 'papaparse';
 import { 
   Invoice, MasterRecord, MasterType, 
@@ -19,6 +19,14 @@ import {
 import MultiSelect from './MultiSelect';
 import TransactionListFilterBar, { ListStatusQuick } from './TransactionListFilterBar';
 import DocumentAuditLogModal from './DocumentAuditLogModal';
+import { DocumentViewerModal } from './shared/DocumentViewerModal';
+import { AttachmentEyeButton } from './shared/AttachmentEyeButton';
+import {
+  deleteServerAttachment,
+  isServerStoredAttachment,
+  linkDocumentAttachments,
+  uploadServerAttachment,
+} from '../utils/serverAttachment';
 import { apiDownloadFile } from '../api';
 
 export type DirectInvoiceModuleEntryIntent = {
@@ -82,6 +90,10 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
   const [showAuditModal, setShowAuditModal] = useState(false);
   const [selectedAuditDoc, setSelectedAuditDoc] = useState<Invoice | null>(null);
   const [downloadingDocId, setDownloadingDocId] = useState<string | null>(null);
+  const diAttachDraftRef = useRef(`draft-${crypto.randomUUID()}`);
+  const [viewerAttachment, setViewerAttachment] = useState<Attachment | null>(null);
+  const [attachViewRev, setAttachViewRev] = useState(0);
+  const bumpAttachViewRev = useCallback(() => setAttachViewRev((n) => n + 1), []);
 
   const addAuditEntry = (doc: Invoice, action: string) => ({
     ...(doc as any),
@@ -305,7 +317,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
     e.target.value = '';
   };
 
-  const handleCreateInvoice = () => {
+  const handleCreateInvoice = async () => {
     // Validation
     if (!invoiceForm.vendorId || !invoiceForm.invoiceNumber || !invoiceForm.department || !invoiceForm.subDepartment || (invoiceForm.centerNames || []).length === 0) {
       alert('Please fill all mandatory header fields.');
@@ -344,6 +356,13 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
       invoiceSource: invoiceForm.invoiceSource || defaultSrc,
       invoiceType: invoiceForm.invoiceType || 'Standard',
     };
+    const draft = diAttachDraftRef.current;
+    try {
+      await linkDocumentAttachments('direct_invoices', draft, newInvoice.id);
+    } catch (e) {
+      alert((e as Error).message || 'Failed to link uploaded files to this invoice.');
+    }
+    diAttachDraftRef.current = `draft-${crypto.randomUUID()}`;
     setDirectInvoices([...directInvoices, newInvoice]);
     setShowForm(false);
     resetForm();
@@ -387,6 +406,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
   };
 
   const resetForm = () => {
+    diAttachDraftRef.current = `draft-${crypto.randomUUID()}`;
     setInvoiceForm({
       entityName: masters.Entity?.[0]?.name || '',
       vendorId: '',
@@ -418,20 +438,57 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
     });
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const newAttachment: Attachment = {
-      id: `att-${Math.random()}`,
-      name: file.name,
-      url: URL.createObjectURL(file),
-      uploadedAt: new Date().toISOString(),
-      source: 'Invoice'
-    };
+    const documentId =
+      invoiceForm.id && String(invoiceForm.id).trim() !== ''
+        ? String(invoiceForm.id).trim()
+        : diAttachDraftRef.current;
 
-    setInvoiceForm((prev: any) => ({ ...prev, attachments: [...(prev.attachments || []), newAttachment] }));
+    try {
+      const meta = await uploadServerAttachment('direct_invoices', documentId, file);
+      const newAttachment: Attachment = {
+        id: meta.id,
+        name: meta.name,
+        url: meta.url,
+        uploadedAt: meta.uploadedAt,
+        source: 'Invoice',
+      };
+      setInvoiceForm((prev: any) => ({ ...prev, attachments: [...(prev.attachments || []), newAttachment] }));
+    } catch (err) {
+      alert((err as Error).message || 'Upload failed');
+    }
+
     e.target.value = '';
+  };
+
+  const removeDiAttachment = async (att: Attachment) => {
+    if (isServerStoredAttachment(att)) {
+      try {
+        await deleteServerAttachment(att.id);
+      } catch (e) {
+        alert((e as Error).message || 'Failed to delete file');
+        return;
+      }
+    }
+    const invId = invoiceForm.id as string | undefined;
+    setInvoiceForm((prev: any) => ({
+      ...prev,
+      attachments: (prev.attachments || []).filter((a: Attachment) => a.id !== att.id),
+    }));
+    if (invId) {
+      setDirectInvoices((prev) =>
+        prev.map((inv) =>
+          inv.id !== invId
+            ? inv
+            : { ...inv, attachments: ((inv as any).attachments || []).filter((a: Attachment) => a.id !== att.id) }
+        )
+      );
+    }
+    setViewerAttachment((v) => (v?.id === att.id ? null : v));
+    bumpAttachViewRev();
   };
 
   const canApprove = (doc: Invoice) => {
@@ -1006,16 +1063,30 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
                 <label className="cursor-pointer bg-white border-2 border-dashed border-slate-200 rounded-xl px-6 py-4 flex-1 flex flex-col items-center justify-center hover:border-indigo-300 transition-colors">
                   <svg className="w-8 h-8 text-slate-300 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></svg>
                   <span className="text-xs font-bold text-slate-400">Click to upload invoice copy</span>
-                  <input type="file" className="hidden" onChange={handleFileUpload} />
+                  <input type="file" className="hidden" onChange={(ev) => void handleFileUpload(ev)} />
                 </label>
                 {invoiceForm.attachments?.length > 0 && (
                   <div className="flex-1 space-y-2">
                     {invoiceForm.attachments.map((att: Attachment) => (
-                      <div key={att.id} className="flex items-center justify-between bg-slate-50 px-3 py-2 rounded-lg border border-slate-100">
-                        <span className="text-xs font-bold text-slate-600 truncate max-w-[150px]">{att.name}</span>
-                        <button onClick={() => setInvoiceForm((prev: any) => ({ ...prev, attachments: prev.attachments.filter((a: any) => a.id !== att.id) }))} className="text-red-400 hover:text-red-600">
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
-                        </button>
+                      <div key={att.id} className="flex items-center justify-between gap-2 bg-slate-50 px-3 py-2 rounded-lg border border-slate-100">
+                        <span className="text-xs font-bold text-slate-600 truncate max-w-[120px]">{att.name}</span>
+                        <div className="flex shrink-0 items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setViewerAttachment(att)}
+                            className="rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[9px] font-black uppercase text-slate-600 hover:bg-slate-100"
+                          >
+                            View
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void removeDiAttachment(att)}
+                            className="rounded border border-rose-200 bg-white px-1.5 py-0.5 text-[9px] font-black uppercase text-rose-600 hover:bg-rose-50"
+                            title="Delete attachment"
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -1027,7 +1098,7 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
           <div className="mt-8 flex justify-end space-x-4">
             <button onClick={() => { setShowForm(false); resetForm(); }} className="px-6 py-3 rounded-xl font-black text-slate-500 hover:bg-slate-50 transition-colors">Cancel</button>
             <button 
-              onClick={handleCreateInvoice}
+              onClick={() => void handleCreateInvoice()}
               disabled={!!invoiceForm.id}
               className="bg-indigo-600 text-white px-8 py-3 rounded-xl font-black shadow-lg shadow-indigo-200 hover:scale-105 transition-transform"
             >
@@ -1157,7 +1228,15 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex flex-col space-y-2">
-                        <div className="flex space-x-2">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <AttachmentEyeButton
+                            documentTable="direct_invoices"
+                            documentId={inv.id}
+                            refreshKey={attachViewRev}
+                            serverAttachmentHintCount={((inv as any).attachments ?? []).filter(isServerStoredAttachment).length}
+                            documentCreatedBy={inv.createdBy}
+                            currentUserId={currentUser.id}
+                          />
                           <button
                             onClick={() => openInvoiceView(inv)}
                             className="text-slate-700 text-xs font-black hover:underline"
@@ -1220,6 +1299,13 @@ const DirectInvoiceModule: React.FC<DirectInvoiceModuleProps> = ({
           </table>
         </div>
       )}
+      <DocumentViewerModal
+        open={!!viewerAttachment}
+        attachment={viewerAttachment}
+        onClose={() => setViewerAttachment(null)}
+        onViewRecorded={bumpAttachViewRev}
+        recordAttachmentView={Boolean(invoiceForm.id) && invoiceForm.createdBy !== currentUser.id}
+      />
       <DocumentAuditLogModal
         isOpen={showAuditModal}
         onClose={() => setShowAuditModal(false)}

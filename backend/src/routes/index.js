@@ -9,8 +9,15 @@ import {
   mapInvoiceRowToOraclePayload,
 } from '../services/oracleInvoiceService.js';
 import { onboardSupplier } from '../services/oracleSupplierService.js';
+import multer from 'multer';
+import { postBudgetUpload } from '../utils/budgetUploadHandler.js';
+import registerFileAttachmentRoutes from '../services/fileAttachmentRoutes.js';
 
 const router = Router();
+const budgetUploadMulter = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 },
+});
 const JWT_SECRET = process.env.JWT_SECRET || 'p2p-indira-jwt-secret-change-in-production';
 
 // JSON columns that may be stored as TEXT/JSON (not JSONB) and need parsing after retrieval
@@ -1960,6 +1967,7 @@ router.post('/budgets', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+router.post('/budgets/upload', budgetUploadMulter.single('file'), postBudgetUpload);
 router.patch('/budgets/:id/workflow', async (req, res) => {
   try {
     const { id } = req.params;
@@ -2117,5 +2125,7 @@ router.post('/masters', async (req, res) => {
     client.release();
   }
 });
+
+registerFileAttachmentRoutes(router);
 
 export default router;

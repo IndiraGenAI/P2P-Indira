@@ -76,6 +76,36 @@ export async function apiPost<T = unknown>(path: string, body?: unknown): Promis
   return res.json();
 }
 
+/** Multipart POST (e.g. file upload). Do not set Content-Type — browser sets boundary. */
+export async function apiPostFormData<T = unknown>(path: string, formData: FormData): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: formData,
+  });
+  const text = await res.text().catch(() => res.statusText);
+  if (res.status === 401) {
+    await handleErrorResponse(res, text);
+  }
+  if (!res.ok) {
+    let message = text || res.statusText;
+    try {
+      const j = JSON.parse(text) as { message?: string; error?: string };
+      if (j.message) message = j.message;
+      else if (j.error) message = j.error;
+    } catch {
+      /* use raw text */
+    }
+    throw new Error(message);
+  }
+  if (!text) return {} as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    return {} as T;
+  }
+}
+
 export async function apiPut<T = unknown>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method: 'PUT',
@@ -100,6 +130,14 @@ export async function apiPatch<T = unknown>(path: string, body?: unknown): Promi
     await handleErrorResponse(res, text);
   }
   return res.json();
+}
+
+export async function apiDelete(path: string): Promise<void> {
+  const res = await fetch(`${API_BASE}${path}`, { method: 'DELETE', headers: getAuthHeaders() });
+  const text = await res.text().catch(() => res.statusText);
+  if (!res.ok) {
+    await handleErrorResponse(res, text);
+  }
 }
 
 export async function apiDownloadFile(path: string, fallbackFileName: string): Promise<void> {
